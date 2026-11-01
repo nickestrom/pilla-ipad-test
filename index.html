@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pilla M0 - iPad test</title>
+<style>
+  body{margin:0;padding:32px;background:#f2efe7;color:#231e16;font:17px/1.45 ui-monospace,Menlo,monospace}
+  h1{font-size:22px;margin:0 0 6px} p{margin:0 0 22px;color:#5d564a;max-width:640px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;max-width:900px}
+  a{display:block;padding:20px 22px;border:2px solid #231e16;border-radius:16px;background:#fff8e6;color:inherit;text-decoration:none;box-shadow:3px 3px 0 #231e16}
+  a:active{transform:translate(2px,2px);box-shadow:1px 1px 0 #231e16}
+  a b{display:block;font-size:19px;margin-bottom:4px} a span{font-size:14px;color:#5d564a}
+</style></head><body>
+<!-- Start page for testing M0 on the tablet when the figures are hosted somewhere that drops query strings (a Claude
+     artifact): every link passes its options in the hash, which tools/harness.html reads when there is no query. -->
+<h1>Pilla M0 - iPad test</h1>
+<p>Each button opens the test page with one figure. The figure is on the left, the command panel on the right.</p>
+<div class="grid">
+  <a href="tools/harness.html#figure=gungbrada&amp;lock=1&amp;fps=1"><b>Gungbrada, camera locked</b><span>Drag the red block and the grey stone between the holes. The view must not turn. Frame rate in the corner.</span></a>
+  <a href="tools/harness.html#figure=gungbrada&amp;lock=1&amp;fps=1&amp;fx=1"><b>Gungbrada, hand-drawn effect on</b><span>Same, with the wobbly ink filter forced on, to compare the frame rate.</span></a>
+  <a href="tools/harness.html#figure=gungbrada"><b>Gungbrada, camera free</b><span>Drag empty space to turn the figure; drag a load to move it.</span></a>
+  <a href="tools/harness.html#figure=vattenkokare&amp;fps=1"><b>Vattenkokare</b><span>Press Starta. In the panel: highlight a part, apply a fault, turn on Titta inuti.</span></a>
+</div>
+</body></html>

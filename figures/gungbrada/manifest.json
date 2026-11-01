@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 2,
+  "id": "gungbrada",
+  "kind": "phenomenon",
+  "name": { "sv": "Gungbräda" },
+  "summary": { "sv": "En planka på en bock. Den som sitter längst ut vinner." },
+  "concepts": [{ "id": "havstang", "part": "planka" }],
+  "ageMin": 5,
+  "parts": [
+    { "id": "planka", "name": { "sv": "Planka" }, "say": { "sv": "Plankan gungar. Det som är tungt och sitter långt ut trycker ner sin sida." },
+      "why": { "sv": "Det som räknas är vikten gånger avståndet från vilopunkten. Är de lika stora på båda sidor står plankan rak. Är en sida större går den ner." }, "tappable": true },
+    { "id": "bock", "name": { "sv": "Bock" }, "say": { "sv": "Här vilar plankan. Det kallas vilopunkt." },
+      "why": { "sv": "Bocken bär upp plankan i en enda punkt. Avstånden mäts från just den punkten. Långt från den punkten blir en liten vikt stark." }, "tappable": true },
+    { "id": "sten", "name": { "sv": "Sten" }, "say": { "sv": "Stenen är tung. Dra den till ett annat hål på plankan." }, "tappable": true },
+    { "id": "kloss", "name": { "sv": "Kloss" }, "say": { "sv": "Klossen är lätt. Dra den långt ut och se om den kan lyfta stenen." }, "tappable": true }
+  ],
+  "params": {
+    "sten-pos": { "type": "int", "min": 1, "max": 4, "default": 1, "part": "sten", "drag": "pinnar-vanster", "unit": "pinne" },
+    "sten-vikt": { "type": "int", "min": 1, "max": 4, "default": 3, "part": "sten", "drag": null, "unit": "kloss" },
+    "kloss-pos": { "type": "int", "min": 1, "max": 4, "default": 1, "part": "kloss", "drag": "pinnar-hoger", "unit": "pinne" },
+    "kloss-vikt": { "type": "int", "min": 1, "max": 4, "default": 1, "part": "kloss", "drag": null, "unit": "kloss" }
+  },
+  "readings": { "lutning": { "type": "enum", "values": ["vanster-ner", "rak", "hoger-ner"] } },
+  "law": { "concept": "havstang", "map": { "m1": "sten-vikt", "d1": "sten-pos", "m2": "kloss-vikt", "d2": "kloss-pos", "tilt": "lutning" } },
+  "predictions": [
+    {
+      "id": "lyft-stenen",
+      "set": { "sten-pos": 1, "sten-vikt": 3, "kloss-vikt": 1 },
+      "lock": ["sten-pos", "sten-vikt", "kloss-vikt"],
+      "ask": { "sv": "Var ska den lilla klossen sitta för att lyfta den tunga stenen?" },
+      "choices": [
+        { "id": "nara", "image": "kloss-nara", "set": { "kloss-pos": 1 } },
+        { "id": "langt", "image": "kloss-langt", "set": { "kloss-pos": 4 } }
+      ],
+      "outcome": "lutning",
+      "explain": { "sv": "Långt ut blir liten kraft stark. Det är en hävstång." }
+    }
+  ],
+  "goals": [
+    {
+      "id": "jamvikt-1",
+      "ageMin": 5,
+      "set": { "sten-pos": 2, "sten-vikt": 2, "kloss-vikt": 1 },
+      "lock": ["sten-pos", "sten-vikt", "kloss-vikt"],
+      "ask": { "sv": "Kan du få gungbrädan att stå rak?" },
+      "until": { "reading": "lutning", "eq": "rak", "holdMs": 1000 },
+      "explain": { "sv": "Hälften så tung, dubbelt så långt ut. Då väger de lika." }
+    },
+    {
+      "id": "jamvikt-2",
+      "ageMin": 5,
+      "set": { "sten-pos": 1, "sten-vikt": 2, "kloss-vikt": 2, "kloss-pos": 3 },
+      "lock": ["sten-pos", "sten-vikt", "kloss-vikt"],
+      "ask": { "sv": "Två stenar och två klossar. Var ska klossarna sitta så att plankan blir rak?" },
+      "until": { "reading": "lutning", "eq": "rak", "holdMs": 1000 },
+      "explain": { "sv": "Lika tungt och lika långt ut. Då väger de lika mycket." }
+    },
+    {
+      "id": "jamvikt-3",
+      "ageMin": 7,
+      "set": { "sten-pos": 1, "sten-vikt": 4, "kloss-vikt": 1, "kloss-pos": 2 },
+      "lock": ["sten-pos", "sten-vikt", "kloss-vikt"],
+      "ask": { "sv": "Stenen är fyra gånger så tung. Var ska den lilla klossen sitta så att plankan blir rak?" },
+      "until": { "reading": "lutning", "eq": "rak", "holdMs": 1000 },
+      "explain": { "sv": "Fyra gånger så tung, fyra gånger så långt ut. Då väger de lika." }
+    }
+  ],
+  "realWorld": { "sv": "Prova att öppna en kapsyl med öppnaren. Var håller du för att det ska gå lätt?" },
+  "generatedBy": { "skill": "pilla-figure", "version": "m0-hand", "date": "2026-11-01" }
+}

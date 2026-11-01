@@ -1,0 +1,146 @@
+{
+  "schemaVersion": 2,
+  "id": "vattenkokare",
+  "kind": "machine",
+  "name": { "sv": "Vattenkokare" },
+  "summary": { "sv": "Se hur en vattenkokare blir varm, kokar och slår av sig själv. Och vad som händer när något går sönder." },
+  "category": "kök",
+  "concepts": [
+    { "id": "varme-ur-strom", "part": "element" },
+    { "id": "strombrytare", "part": "vippbrytare" },
+    { "id": "vattnets-former", "part": "angror" }
+  ],
+  "ageMin": 5,
+  "parts": [
+    {
+      "id": "vippbrytare",
+      "name": { "sv": "Strömbrytare" },
+      "say": { "sv": "Knappen som sätter på vattenkokaren. Tryck, så börjar strömmen gå." },
+      "why": { "sv": "Brytaren öppnar och stänger strömmens väg. När den står på kan strömmen gå till värmeelementet. En liten stång kan slå av den." },
+      "tappable": true
+    },
+    {
+      "id": "lampa",
+      "name": { "sv": "Lampa" },
+      "say": { "sv": "Lampan lyser när strömmen är på. Lyser den inte, når ingen ström fram." },
+      "why": { "sv": "Lampan sitter efter brytaren. Lyser den men vattnet blir inte varmt, är felet längre fram, till exempel i elementet." },
+      "tappable": true
+    },
+    {
+      "id": "element",
+      "name": { "sv": "Värmeelement" },
+      "say": { "sv": "Ett varmt metallrör i botten, ungefär som en spisplatta. Dra ur sladden först om du ska titta inuti." },
+      "why": { "sv": "Strömmen har svårt att ta sig igenom den tunna tråden i elementet, så tråden blir het. Värmen går vidare till vattnet. El blir värme." },
+      "visibleIn": ["xray"],
+      "tappable": true
+    },
+    {
+      "id": "angror",
+      "name": { "sv": "Ångrör" },
+      "say": { "sv": "Ett smalt rör som leder ångan ner till en bricka. Då vet kokaren att vattnet kokar." },
+      "why": { "sv": "När vattnet kokar blir ångan het. Den följer röret ner till bimetallbrickan och värmer den, så att brytaren slår av. Kalk kan täppa till röret." },
+      "visibleIn": ["xray"],
+      "tappable": true
+    },
+    {
+      "id": "bimetall",
+      "name": { "sv": "Bimetallbricka" },
+      "say": { "sv": "En liten bricka av två metaller. Het ånga får den att knäppa till, med ett litet klick." },
+      "why": { "sv": "Två metaller sitter ihop och växer olika mycket när de blir varma. Därför böjer brickan sig med ett snärt och trycker av strömbrytaren." },
+      "visibleIn": ["xray"],
+      "tappable": true
+    },
+    {
+      "id": "kontakt",
+      "name": { "sv": "Kontakt" },
+      "say": { "sv": "Här möts sockeln och kokaren. Ett stift släpper in strömmen. Sitter det löst händer ingenting." },
+      "why": { "sv": "Ett stift i sockeln går in i en kontakt under kokaren. Kontakten är rund, så kokaren kan vridas åt alla håll. Är den lös når ingen ström fram." },
+      "visibleIn": ["xray"],
+      "tappable": true
+    },
+    {
+      "id": "sockel",
+      "name": { "sv": "Sockel" },
+      "say": { "sv": "Sockeln står kvar på bordet. Kokaren lyfts av när du ska hälla upp." },
+      "why": { "sv": "Sockeln får ström från väggen. Kokaren står bara ovanpå och har ingen egen sladd, så den går lätt att lyfta och hälla från." },
+      "tappable": true
+    },
+    {
+      "id": "sladd",
+      "name": { "sv": "Sladd" },
+      "say": { "sv": "Sladden tar strömmen från väggen till sockeln. Dra alltid ur den först, innan du tittar inuti." },
+      "tappable": true
+    },
+    {
+      "id": "lock",
+      "name": { "sv": "Lock" },
+      "say": { "sv": "Locket håller ångan kvar, så vattnet kokar fortare. Knappen på locket öppnar det." },
+      "tappable": true
+    },
+    {
+      "id": "pip",
+      "name": { "sv": "Pip" },
+      "say": { "sv": "Här hälls vattnet ut. Ångan puffar ut här också när det kokar." },
+      "tappable": true
+    },
+    {
+      "id": "vatten",
+      "name": { "sv": "Vatten" },
+      "say": { "sv": "Vattnet blir varmt av elementet. När det kokar bubblar det kraftigt." },
+      "why": { "sv": "Vid hundra grader blir vattnet till ånga. Bubblorna är ånga som bildas nere vid det heta elementet och stiger uppåt." },
+      "tappable": true
+    },
+    {
+      "id": "handtag",
+      "name": { "sv": "Handtag" },
+      "say": { "sv": "Handtaget är kallt, för där finns ingen värme. Håll i det när du häller." },
+      "tappable": true
+    }
+  ],
+  "controls": [
+    { "id": "start", "label": { "sv": "Starta" }, "type": "button", "part": "vippbrytare" }
+  ],
+  "states": {
+    "power": { "values": ["off", "heating", "boiling"], "default": "off" },
+    "xray": { "values": [false, true], "default": false }
+  },
+  "readings": {
+    "power": { "type": "enum", "values": ["off", "heating", "boiling"] },
+    "temp": { "type": "int", "min": 20, "max": 100, "unit": "C" }
+  },
+  "faults": [
+    {
+      "id": "kalk-i-angror",
+      "symptom": { "sv": "Vattnet kokar och kokar. Kokaren slår aldrig av." },
+      "culprit": "angror",
+      "fix": { "type": "tap", "hint": { "sv": "Titta inuti. Tryck på röret som ångan ska åka i." } },
+      "explain": { "sv": "Kalk har täppt till ångröret. Ångan kommer inte fram till brickan, så den knäpper aldrig." }
+    },
+    {
+      "id": "trasigt-element",
+      "symptom": { "sv": "Lampan lyser, men vattnet blir aldrig varmt." },
+      "culprit": "element",
+      "fix": { "type": "tap", "hint": { "sv": "Titta inuti. Tryck på det som ska bli varmt." } },
+      "explain": { "sv": "Värmeelementet är trasigt. Strömmen kommer inte igenom, så ingenting blir varmt." }
+    },
+    {
+      "id": "glapp-i-kontakten",
+      "symptom": { "sv": "Ingenting händer. Lampan lyser inte heller." },
+      "culprit": "kontakt",
+      "fix": { "type": "tap", "hint": { "sv": "Titta inuti. Tryck där sockeln och kokaren möts." } },
+      "explain": { "sv": "Kontakten sitter löst. Då når ingen ström fram till kokaren, inte ens till lampan." }
+    }
+  ],
+  "missions": [
+    {
+      "id": "koka-vatten",
+      "steps": [
+        { "say": { "sv": "Slå på vattenkokaren." }, "done": { "event": "control", "id": "start" } },
+        { "say": { "sv": "Titta inuti. Vilken del blir varm?" }, "done": { "event": "tap", "part": "element" } },
+        { "say": { "sv": "Vilken liten bricka slår av kokaren?" }, "done": { "event": "tap", "part": "bimetall" } }
+      ]
+    }
+  ],
+  "realWorld": { "sv": "Leta rätt på knappen på er riktiga vattenkokare!" },
+  "generatedBy": { "skill": "pilla-figure", "version": "m0-hand", "date": "2026-11-01" }
+}
