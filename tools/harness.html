@@ -50,6 +50,8 @@
   // Claude artifact, keep the hash): harness.html#figure=gungbrada&fps=1
   const useHash = !location.search && location.hash.length > 1, raw = () => useHash ? location.hash.slice(1) : location.search;
   const q = new URLSearchParams(raw()), id = q.get('figure') || 'demo', root = q.get('root') || 'figures';
+  // a hash-only change (Back then another link on the start page) does not load a new document: load it ourselves
+  if (useHash) addEventListener('hashchange', () => location.reload());
   const base = '../' + root + '/' + id + '/';
   const frame = document.getElementById('frame'), logEl = document.getElementById('log');
   const events = [], pending = new Map(), waiters = [];
