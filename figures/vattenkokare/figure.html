@@ -47,7 +47,7 @@ let CAM_LIM = null;
 /* ---------- Pilla: one tiny event bus + input/camera lock flags ----------
    PILLA_EV.emit(type, payload) is how the engine reports what the child did (tap, control, stateChanged, paramChanged,
    viewChanged, fixAttempt); bridge.js subscribes and forwards to the app. 'mounted' (once, {ui, cfg}) and 'rendered'
-   (after every draw) are internal. Handlers never break the engine: a throwing handler is rethrown asynchronously. */
+   (after every draw; the payload ui has ui.changed) are internal; 'repaired {fault}' is a repair animation that has played to the end. Handlers never break the engine: a throwing handler is rethrown asynchronously. */
 const PILLA_EV = (() => { const h = {}; return {
   on(type, fn){ (h[type] || (h[type] = [])).push(fn); },
   emit(type, payload){ for (const fn of (h[type] || []).slice()){ try { fn(payload); } catch (e) { setTimeout(() => { throw e; }); } } } }; })();
@@ -79,7 +79,11 @@ const boxMid = b => [0,1,2].map(k => (b[0][k] + b[1][k]) / 2);
 const sepOrder = (p, q) => { if (!p.box || !q.box) return 0;
   for (let k = 0; k < 3; k++){ if (p.box[1][k] <= q.box[0][k] + 1e-6) return CAM_V[k] >= 0 ? -1 : 1; if (q.box[1][k] <= p.box[0][k] + 1e-6) return CAM_V[k] >= 0 ? 1 : -1; }
   return 0; };
-const byDepth = parts => parts.filter(Boolean).sort((p,q) => sepOrder(p,q) || (depthOf(p.at || boxMid(p.box)) - depthOf(q.at || boxMid(q.box)))).map(p => p.svg).join('');
+const depthSorted = parts => parts.filter(Boolean).sort((p,q) => sepOrder(p,q) || (depthOf(p.at || boxMid(p.box)) - depthOf(q.at || boxMid(q.box))));
+const byDepth = parts => depthSorted(parts).map(p => Array.isArray(p.svg) ? p.svg.join('') : p.svg).join('');
+// byDepthL: the same order, but returned as an array of strings (one per part, nested arrays flattened in place), so that
+// scene() can return layers: a part whose drawing did not change since the last frame is then not redrawn (see mountFigure)
+const byDepthL = parts => depthSorted(parts).flatMap(p => p.svg);
 // the half of a vertical ring that faces the viewer / is turned away, as [from, to] angles in degrees (0 = +x, 90 = +y)
 const nearHalf = () => [YAW - 90, YAW + 90], farHalf = () => [YAW + 90, YAW + 270];
 // an open container (cup, bin, cone, drum) between two rings: far inner wall, then its contents, then the near outer wall
@@ -350,6 +354,7 @@ const PILLA_CSS = `
   @keyframes hlpulse{0%,100%{opacity:1}50%{opacity:.3}}
   html.inlock #fig, html.inlock .actions{pointer-events:none}
   html.nofx #art{filter:none!important} html.fx #art{filter:url(#hand)!important}
+  html.noblur #art [filter]{filter:none!important}
   #fps{position:fixed;right:6px;bottom:6px;z-index:9;font:700 12px ui-monospace,Menlo,monospace;background:rgba(35,30,22,.75);color:#fff;padding:2px 7px;border-radius:6px;pointer-events:none}
   html.pilla body{display:block;padding:0;height:100%;overflow:hidden}
   html.pilla header, html.pilla .controls, html.pilla .made-with, html.pilla .zchip{display:none!important}
@@ -374,7 +379,13 @@ const filterFor = k => `<filter id="hand" x="-3%" y="-3%" width="106%" height="1
      size:[W,D,H],                 // bounding box, used to frame the view (shadow range included)
      palette:'mustard',            // default PALS key
      state:{...},                  // figure state (st.pal is built in)
-     scene: (st, m) => svgString,  // m = current palette {l,m,d}
+     scene: (st, m) => svgString,  // m = current palette {l,m,d}. May instead return an ARRAY of strings = layers, back to front
+                                   //   (use byDepthL(parts) instead of byDepth). Each layer is its own <g>; a layer whose string is
+                                   //   identical to last frame's is not written to the DOM, so the browser does not re-parse, re-style
+                                   //   or repaint it. A string equal to last frame's is not written either. Keep still parts and
+                                   //   moving parts in separate layers: cost per frame follows what CHANGED, not what is drawn.
+                                   //   A layer may also be { g:{opacity:'.2'}, kids:[...layers] }: a group whose kids are layers too.
+                                   //   ui.changed lists the elements written by the last render ([art] for a string).
      readout: st => 'text',        // status line under the figure
      buttons: [{label, onClick(st, ui)}      // listed in the order the user should do them
                | {label, choices: st => [{label, onClick(st,ui), current?, disabled?, why?}]}],   // opens a picker
@@ -391,7 +402,12 @@ const filterFor = k => `<filter id="hand" x="-3%" y="-3%" width="106%" height="1
                                    // how a manifest param is read and written ("params" is the URL-param reader above).
                                    //   set() is called when a dragged part lands, and for setParam.
      states: { key: { get: st => value, set: (st, value, ui) => void } },   // for manifest.states; 'xray' is built in
-     faults: { faultId: { apply: (st, ui) => void, clear: (st, ui) => void } },   // idempotent
+     faults: { faultId: { apply: (st, ui) => void, clear: (st, ui) => void, repair?: (st, ui, done) => void } },   // apply/clear idempotent
+                                   //   repair (optional): plays the repair animation (1.2-3 s, no step shorter than 0.6 s) that ends in
+                                   //   exactly the state clear() leaves, and calls done() exactly once when it ends. Started by
+                                   //   ui.clearFault(id, {animate:true}); the fault counts as active until done() runs, then the engine
+                                   //   marks it cleared and emits 'repaired {fault}'. reset() cancels it (stop your own timers in onReset;
+                                   //   done.cancelled is true then). Use ui.animate(step) for the motion.
      controls: { controlId: (st, ui) => void },   // one button per manifest control of type "button" (control.label.sv, in
                                    //   manifest order); a child press emits 'control {id}'. "buttons" still works beside it.
      onReset: (st, ui) => void,    // optional: stop the figure's own timers/loops when ui.reset() runs
@@ -400,7 +416,7 @@ const filterFor = k => `<filter id="hand" x="-3%" y="-3%" width="106%" height="1
    })  -> ui = { st, render, animate(stepFn), flash(text,ms),
                  invalidate(), camTo(yaw,pitch,ms), settled(), reset(), highlight(part, style, ms), lockInput(on), lockParam(param,on),
                  lockCamera(on), setXray(on), rotateTo(view), setParam(param,value,animate), setState(key,value), press(id),
-                 applyFault(id), clearFault(id), readings(), partIds(), camera(), view() }
+                 applyFault(id), clearFault(id, {animate}), readings(), partIds(), camera(), view() }
    animate(step): calls step(dt seconds) every frame and re-renders until step returns false.
    settled(): no running animation step, no active drag (camera or part), no glide.
    reset(): deep copy of the initial state (taken after params(st,q)) back into st, faults cleared, highlight and locks
@@ -459,6 +475,8 @@ function mountFigure(cfg){
   const html = document.documentElement;
   if (q.get('chrome') !== '1') html.classList.add('pilla');
   if (q.get('fx') === '0') html.classList.add('nofx'); else if (q.get('fx') === '1') html.classList.add('fx');
+  // ?blur=0: drop every filter inside the drawing (glows, soft steam), to measure what they cost on a slow tablet
+  if (q.get('blur') === '0') html.classList.add('noblur');
   document.body.innerHTML = `
     <header><h1>Fig. ${cfg.fig} — ${cfg.title}</h1></header>
     <div class="stage">
@@ -509,7 +527,7 @@ function mountFigure(cfg){
 
   const art = document.getElementById('art'), readout = document.getElementById('readout'), hl = document.getElementById('hl');
   const ui = { st }; PL.cfg = cfg; PL.ui = ui;
-  const lockedP = new Set(), faultsOn = new Set();
+  const lockedP = new Set(), faultsOn = new Set(), repairing = new Map();   // repairing: fault id -> { cancelled } while its repair animation runs
   let hlSpec = null, hlTimer = 0;
   // highlight: a rounded rect around the union of every [data-part=part] box, drawn in #hl (after #art, outside the filter)
   const drawHl = () => { hl.innerHTML = ''; if (!hlSpec) return;
@@ -526,8 +544,51 @@ function mountFigure(cfg){
       + `<rect ${rr} style="fill:var(--accent,#f4b829)" fill-opacity=".14" stroke="none"/>`; };
   ui.highlight = (partId, style = 'glow', ms) => { clearTimeout(hlTimer); hlSpec = partId ? { part: partId, style } : null; drawHl();
     if (hlSpec && ms > 0) hlTimer = setTimeout(() => ui.highlight(''), ms); };
-  ui.render = () => { _clipN = 0; document.documentElement.style.setProperty('--accent', PALS[st.pal].l); art.innerHTML = inkScale(cfg.scene(st, PALS[st.pal])); if (!ui._flash) readout.textContent = cfg.readout ? cfg.readout(st) : ''; if (ui.drawStats) ui.drawStats();
-    drawHl(); PILLA_EV.emit('rendered', ui); };
+  // Drawing the scene. scene() may return one string (the whole drawing, as always) or an array of layer nodes (back to
+  // front; usually strings). Each layer lives in its own <g>; a layer whose string is the same as last frame is left alone, so the browser
+  // does not re-parse, re-style or repaint it. A single string that did not change is not written either.
+  // ui.changed = the elements written this render ([art] for a string, the layer <g>s for an array, [] if nothing changed).
+  // A layer node is a string, an array of nodes (flattened in place), or { g: {attr: value}, kids: [nodes] }: a <g> with those
+  // attributes (a translucent group, say) whose kids are layers in their own right, so one group can hold still and moving parts.
+  // Do not put castShadow() fills inside a { g } node with opacity < 1 (the page moves them out of translucent groups).
+  let lastWhole = null, layerState = [];
+  const nodesToString = n => Array.isArray(n) ? n.map(nodesToString).join('') : n !== null && typeof n === 'object'
+    ? `<g ${Object.entries(n.g || {}).map(([k, v]) => `${k}="${v}"`).join(' ')}>${nodesToString(n.kids || [])}</g>` : (n || '');
+  const NS_SVG ='http://www.w3.org/2000/svg', flatten = (a, out = []) => { for (const n of a) if (Array.isArray(n)) flatten(n, out); else out.push(n); return out; };
+  const syncNodes = (host, state, nodes, changed) => {
+    const list = flatten(Array.isArray(nodes) ? nodes : [nodes]);
+    for (let i = 0; i < list.length; i++){
+      const n = list[i], grp = n !== null && typeof n === 'object';
+      let ent = state[i];
+      if (!ent || ent.grp !== grp){
+        const el = document.createElementNS(NS_SVG, 'g');
+        if (ent) host.replaceChild(el, ent.el); else host.appendChild(el);
+        ent = state[i] = { grp, el, str: null, key: null, sub: [] }; }
+      if (!grp){ const s = inkScale(n || ''); if (ent.str !== s){ ent.el.innerHTML = s; ent.str = s; changed.push(ent.el); } }
+      else {
+        const key = JSON.stringify(n.g || {});
+        if (ent.key !== key){ for (const a of [...ent.el.attributes]) ent.el.removeAttribute(a.name);
+          for (const [k, v] of Object.entries(n.g || {})) ent.el.setAttribute(k, v); ent.key = key; changed.push(ent.el); }
+        syncNodes(ent.el, ent.sub, n.kids || [], changed); } }
+    while (state.length > list.length) state.pop().el.remove(); };
+  const paint = res => {
+    const changed = [];
+    if (Array.isArray(res)){
+      if (lastWhole !== null){ art.textContent = ''; lastWhole = null; }
+      syncNodes(art, layerState, res, changed);
+    } else {
+      if (layerState.length){ art.textContent = ''; layerState = []; lastWhole = null; }
+      const s = inkScale(res);
+      if (s !== lastWhole){ art.innerHTML = s; lastWhole = s; changed.push(art); }
+    }
+    ui.changed = changed; };
+  ui.changed = [];
+  let lastAccent = '', lastReadout = null;
+  ui.render = () => { _clipN = 0; const ac = PALS[st.pal].l; if (ac !== lastAccent){ lastAccent = ac; document.documentElement.style.setProperty('--accent', ac); }
+    paint(cfg.scene(st, PALS[st.pal]));
+    if (!ui._flash){ const r = cfg.readout ? cfg.readout(st) : ''; if (r !== lastReadout){ lastReadout = r; readout.textContent = r; } } else lastReadout = null;
+    if (ui.drawStats) ui.drawStats();
+    if (hlSpec || hl.firstChild) drawHl(); PILLA_EV.emit('rendered', ui); };
   // big numbers in the top-right corner (credit, change, score…); a value that changes gets a little bump
   const statsEl = document.getElementById('stats'), prevStats = {};
   ui.drawStats = () => { if (!statsEl) return;
@@ -693,15 +754,34 @@ function mountFigure(cfg){
     if (key === 'xray'){ h.set(st, value, ui); return true; }     // setXray reports it itself
     h.set(st, value, ui); ui.render(); PILLA_EV.emit('stateChanged', { key, value: h.get(st) }); return true; };
   ui.applyFault = id => { const h = cfg.faults && cfg.faults[id]; if (!h) return false; if (!faultsOn.has(id)){ faultsOn.add(id); h.apply(st, ui); ui.render(); } return true; };
-  ui.clearFault = id => { const h = cfg.faults && cfg.faults[id]; if (!h) return false; if (faultsOn.has(id)){ faultsOn.delete(id); h.clear(st, ui); ui.render(); } return true; };
+  // clearFault(id, {animate}): without animate (or with no repair() on the fault) the fault is cleared at once, as always.
+  // With animate:true and a repair(st, ui, done) on the fault, the repair animation starts and the fault counts as active
+  // until the figure calls done() (exactly once, 1.2-3 s later); then it is marked cleared and 'repaired {fault}' is emitted.
+  // animate:true without a repair() clears at once and still emits 'repaired' (on the next tick, after the caller's ack), so
+  // the app has one signal to wait for. A repeated clearFault while a repair runs does nothing. reset() cancels a running
+  // repair (no 'repaired'; a later done() is ignored; done.cancelled tells the figure's own timers).
+  ui.clearFault = (id, opts) => { const h = cfg.faults && cfg.faults[id]; if (!h) return false;
+    const animate = !!(opts && opts.animate);
+    if (repairing.has(id)) return true;
+    if (animate && h.repair && faultsOn.has(id)){
+      const rec = { cancelled: false }; repairing.set(id, rec);
+      const done = () => { if (rec.cancelled || repairing.get(id) !== rec) return; repairing.delete(id); faultsOn.delete(id); ui.render(); PILLA_EV.emit('repaired', { fault: id }); };
+      Object.defineProperty(done, 'cancelled', { get: () => rec.cancelled });
+      h.repair(st, ui, done);
+      return true; }
+    if (faultsOn.has(id)){ faultsOn.delete(id); h.clear(st, ui); ui.render(); }
+    if (animate) setTimeout(() => PILLA_EV.emit('repaired', { fault: id }), 0);
+    return true; };
   ui.readings = () => cfg.readings ? cfg.readings(st) : {};
   // parts the figure can show: the ids in the drawing now, plus those only drawn with see-through on (one off-screen
   // render of the scene with xr = 1, then everything restored)
   ui.partIds = () => { const ids = new Set([...art.querySelectorAll('[data-part]')].map(g => g.dataset.part)), xr0 = st.xr, ln0 = window.__ln;
-    try { st.xr = 1; window.__ln = Object.assign({}, ln0); const s = cfg.scene(st, PALS[st.pal]); for (const m of s.matchAll(/data-part="([^"]+)"/g)) ids.add(m[1]); }
+    try { st.xr = 1; window.__ln = Object.assign({}, ln0); const r = cfg.scene(st, PALS[st.pal]), s = nodesToString(r); for (const m of s.matchAll(/data-part="([^"]+)"/g)) ids.add(m[1]); }
     catch (e) {} finally { st.xr = xr0; window.__ln = ln0; _clipN = 0; }
     return [...ids]; };
   ui.reset = () => {
+    for (const rec of repairing.values()) rec.cancelled = true;
+    repairing.clear();
     for (const id of [...faultsOn]) ui.clearFault(id);
     if (cfg.onReset) cfg.onReset(st, ui);
     for (const k of Object.keys(st)) delete st[k];
@@ -873,8 +953,12 @@ function mountKeypad(spec){
    Commands (app -> figure), each answered at once with { v:2, figure, type:'ack', seq:<the command's seq>, ok, error? }.
    Unknown part/control/param/fault/key, a wrong type or an out-of-range value gives ok:false, never a throw. All idempotent.
      highlight {part, style?, ms?}   setState {key, value}   setParam {param, value, animate?}   lockParam {param, on}
-     press {control}   setXray {on}   rotateTo {view}   lockCamera {on}   applyFault {fault}   clearFault {fault}
+     press {control}   setXray {on}   rotateTo {view}   lockCamera {on}   applyFault {fault}   clearFault {fault, animate?}
      lockInput {on}    reset {}
+     clearFault with animate:true (default false) plays the figure's repair animation (1.2-3 s) if the fault has one: the ack
+     comes at once, the fault stays active until the animation ends, then 'repaired {fault}' is sent. Without a repair
+     animation (or animate false) the fault is cleared at once; with animate:true 'repaired' is still sent, right after the ack.
+     A repeated clearFault while a repair runs is an ok no-op; reset cancels the repair (no 'repaired').
      setParam with animate (default true) glides the part along its track (>= 600 ms) when it has one and emits
      paramChanged {by:'app'} when it lands (every time, also when the value did not change, so the app can wait for it).
      rotateTo respects the figure's turning limit (a figure without turn:'full' stays within +-60 degrees of the front).
@@ -885,6 +969,7 @@ function mountKeypad(spec){
        keys of cfg.readings(st).
      tap {part}  control {id}  stateChanged {key, value}  paramChanged {param, value, by}  viewChanged {view}
      fixAttempt {fault, success} (reserved, the engine does not emit it yet)  error {code, message}
+     repaired {fault}: a clearFault with animate has played to the end (the fault is cleared now)
      reading {values, settled}: after a render in which the values changed, with settled:false, at most one per 100 ms;
        when the figure has come to rest, exactly one settled:true per rest state (again only after something moved and
        settled again). One settled reading is also sent right after ready.
@@ -931,7 +1016,8 @@ function mountKeypad(spec){
     applyFault: m => need(ids(M.faults).includes(m.fault), 'unknown fault: ' + m.fault)
       || need(ui.applyFault(m.fault), 'figure has no handler for fault ' + m.fault),
     clearFault: m => need(ids(M.faults).includes(m.fault), 'unknown fault: ' + m.fault)
-      || need(ui.clearFault(m.fault), 'figure has no handler for fault ' + m.fault),
+      || need(m.animate == null || isBool(m.animate), 'animate must be a boolean')
+      || need(ui.clearFault(m.fault, { animate: m.animate === true }), 'figure has no handler for fault ' + m.fault),
     lockInput: m => need(isBool(m.on), 'on must be a boolean') || void ui.lockInput(m.on),
     reset: () => void ui.reset(),
   };
@@ -952,7 +1038,7 @@ function mountKeypad(spec){
     try { window.parent.postMessage(ack, '*'); } catch (e) { /* nobody listens */ }
   });
 
-  for (const t of ['tap', 'control', 'stateChanged', 'paramChanged', 'viewChanged', 'fixAttempt']) PILLA_EV.on(t, p => post(t, p));
+  for (const t of ['tap', 'control', 'stateChanged', 'paramChanged', 'viewChanged', 'fixAttempt', 'repaired']) PILLA_EV.on(t, p => post(t, p));
   addEventListener('error', e => post('error', { code: 'script', message: String(e.message) }));
   addEventListener('unhandledrejection', e => post('error', { code: 'promise', message: String((e.reason && e.reason.message) || e.reason) }));
 
@@ -1193,20 +1279,23 @@ function shellSvg(st, m, k = 0){
   if (fF) return { shell: hs + gr + rest, over: '' };
   return k > 0 ? { shell: rest + hs, over: gr } : { shell: rest + hs + gr, over: '' };
 }
+// kettleSvg returns an ARRAY of strings (layers, back to front): the engine redraws only those that changed since the last
+// frame (the shell and most working parts are the same every frame; the water, bubbles and steam are not)
 function kettleSvg(st, m, k){
   const so = steamOutside(st), sh = shellSvg(st, m, k);
-  let shell = sh.shell, hits = '';
-  if (k > 0){
-    // far inner walls faintly, the shell as a ghost, then the working parts over it and the switch redrawn on top
-    let far = '';
-    for (let i = 0; i < KR.length - 1; i++) far += loft(kRing(KR[i][0], KR[i][1]), kRing(KR[i+1][0], KR[i+1][1]), n => mix(toneI(n.map(v => -v), KM), '#f2efe7', .55), true);
-    far += fill(pd(kRing(ZB, KR[0][1])), mix(KM.d, '#f2efe7', .5));
-    shell = `<g opacity="${f(.5*k)}">${far}</g>${shell}<g opacity="${f(.6*k)}">${hullInk(KR.flatMap(([z, r]) => kRing(z, r)), 2.8)}</g>`
-      + `<g opacity="${f(k)}">${kettleMech(st, k)}${rockerSvg(st)}${faultTop(st)}</g>` + sh.over;
-    if (k > .6) hits = hitLine('element', Array.from({length:17}, (_, i) => eP(200 + i*20)), 2.4) + hitLine('angror', TUBE, 2.6)
-      + hitDot('bimetall', [CX, KY, DZ + .5], DR + 1.5) + hitDot('kontakt', [KX, KY, ZB + 2.2], 6);
-  }
-  return so.back + shell + hits + so.front;
+  if (!(k > 0)) return [so.back, sh.shell, so.front];
+  // far inner walls faintly, the shell as a ghost, then the working parts over it and the switch redrawn on top
+  let far = '';
+  for (let i = 0; i < KR.length - 1; i++) far += loft(kRing(KR[i][0], KR[i][1]), kRing(KR[i+1][0], KR[i+1][1]), n => mix(toneI(n.map(v => -v), KM), '#f2efe7', .55), true);
+  far += fill(pd(kRing(ZB, KR[0][1])), mix(KM.d, '#f2efe7', .5));
+  const ghost = `<g opacity="${f(.5*k)}">${far}</g>${sh.shell}<g opacity="${f(.6*k)}">${hullInk(KR.flatMap(([z, r]) => kRing(z, r)), 2.8)}</g>`;
+  // the working parts fade in as one group while see-through is easing in; once it is fully on (opacity 1, no visible
+  // effect) they are separate layers
+  const mech = [...kettleMech(st, k), rockerSvg(st), faultTop(st)];
+  let hits = '';
+  if (k > .6) hits = hitLine('element', Array.from({length:17}, (_, i) => eP(200 + i*20)), 2.4) + hitLine('angror', TUBE, 2.6)
+    + hitDot('bimetall', [CX, KY, DZ + .5], DR + 1.5) + hitDot('kontakt', [KX, KY, ZB + 2.2], 6);
+  return [so.back, ghost, ...(k >= 1 ? mech : [`<g opacity="${f(k)}">${mech.join('')}</g>`]), sh.over + hits, so.front];
 }
 
 /* ---------- see-through: how a real cordless kettle works ----------
@@ -1227,7 +1316,21 @@ const kWire = (pts, col, w = .45) => { const d = pd(pts, false), [a, b] = [P(...
   return { box: kBoxOf(pts), svg: `<path d="${d}" fill="none" stroke="${INK}" stroke-width="${f(2*w + 1)}" stroke-linejoin="round" stroke-linecap="round"/><path d="${d}" fill="none" stroke="${col}" stroke-width="${f(2*w)}" stroke-linejoin="round" stroke-linecap="round"/>`
     + [a, b].map(([X, Y]) => `<circle cx="${f(X)}" cy="${f(Y)}" r="1.1" fill="${INK}"/>`).join('') }; };
 const ELR = 19, EZ = ZB + 3;                                      // element ring radius and height
-const eP = deg => [KX + ELR*Math.cos(deg*DEG), KY + ELR*Math.sin(deg*DEG), EZ];
+const eP = (deg, dz = 0) => [KX + ELR*Math.cos(deg*DEG), KY + ELR*Math.sin(deg*DEG), EZ + dz];
+/* ---------- repair animations (faults[id].repair) ----------
+   While a repair plays, st.rep[kind] is its time in seconds (from the wall clock, so it takes as long on a slow screen) and the
+   drawing below follows it; the fault itself stays set, so the simulation goes on as before. At the end st.rep[kind] is
+   removed, the fault is cleared exactly as clear() does, and done() is called. */
+const repT = (st, kind) => st.rep && st.rep[kind] != null ? st.rep[kind] : -1;
+// element: A 0-.8 s the broken coil rises out and fades | B .8-1.4 s the empty seat | C 1.4-2.4 s a new coil settles in (a small bounce)
+function elRep(st){
+  const er = repT(st, 'element');
+  if (er < 0) return { dz: 0, op: 1, show: true, broken: st.elBroken };
+  if (er < .8){ const u = ease(er/.8); return { dz: 36*u, op: 1 - u, show: true, broken: true }; }
+  if (er < 1.4) return { dz: 0, op: 0, show: false, broken: false };
+  const u = clamp01((er - 1.4)/1.0);
+  return { dz: 36*(1-u)*(1-u) - 1.5*Math.sin(u*Math.PI*2.5)*(1-u), op: clamp01(u/.35), show: true, broken: false };
+}
 const EBREAK = 400;                                               // the broken element segment starts at this angle (400 = 40 deg, near the viewer at the front view)
 const TUBE = [[KX - 20, KY, ZT - 5], [KX - rAt(ZT - 5) + 2.4, KY, ZT - 5], [KX - rAt(ZT - 9) + 2.4, KY, ZT - 9],
   [KX - rAt(ZB + 21) + 2.4, KY, ZB + 21], [KX - 35.5, KY, ZB + 16.5], [CX, KY, DZ + 3.3]];
@@ -1253,19 +1356,26 @@ function tubeSteam(st, upper){
 }
 // the connector: the base's pin standing in the kettle's socket, a contact pad in the socket's roof.
 // Loose connector: the pin leans away and its tip stops short of the pad, with clear air between them.
+// Repair (st.rep.kontakt, seconds): A 0-.8 the bent pin straightens | B .8-1.4 it is pushed home | C 1.4-2.0 it clicks (a ring at the pad)
 function kontaktSvg(st){
-  let sv;
-  if (st.loose){
-    const bend = [KX + 3.8, KY - 3.6, ZB + 3.1];
+  let sv, click = '';
+  const kr = repT(st, 'kontakt');
+  if (st.loose && kr < 1.4){
+    const lean = kr < 0 ? 1 : 1 - ease(clamp01(kr/.8)), push = kr < .8 ? 0 : ease(clamp01((kr - .8)/.6));
+    const bend = [KX + 3.8*lean, KY - 3.6*lean, ZB + 3.1 + 1.4*push];
     sv = cyl(KX, KY, ZB - .1, ZB + 1.3, 2.6, METAL, toneI, .6, 18) + rod([KX, KY, ZB + 1.3], bend, 2.3, METAL, toneI, .6, 2.3, 14)
-      + rod(bend.map((v, i) => v + [-.9, .8, -.3][i]), bend, 2.4, TCOP, toneI, .5, 2.4, 14);
-  } else sv = cyl(KX, KY, ZB - .1, ZB + 4.5, 2.6, METAL, toneI, .6, 18) + cyl(KX, KY, ZB + 3.6, ZB + 4.5, 2.75, TCOP, toneI, .5, 18);
-  return sv + `<g opacity=".5">${cyl(KX, KY, ZB - .1, ZB + 5.4, 6, DARK, toneI, .8, 24)}</g>` + cyl(KX, KY, ZB + 4.6, ZB + 5.3, 3.6, TCOP, toneI, .6, 18);
+      + rod(bend.map((v, i) => v + [-.9*lean, .8*lean, -.3][i]), bend, 2.4, TCOP, toneI, .5, 2.4, 14);
+  } else {
+    sv = cyl(KX, KY, ZB - .1, ZB + 4.5, 2.6, METAL, toneI, .6, 18) + cyl(KX, KY, ZB + 3.6, ZB + 4.5, 2.75, TCOP, toneI, .5, 18);
+    if (kr >= 1.4){ const u = clamp01((kr - 1.4)/.6), [X, Y] = P(KX, KY, ZB + 5.4);
+      click = `<ellipse cx="${f(X)}" cy="${f(Y)}" rx="${((4 + 7*u)*CAM_K).toFixed(2)}" ry="${((3 + 5.2*u)*CAM_K).toFixed(2)}" fill="none" stroke="#ff8a2e" ${mw(1.6)} opacity="${(1 - u).toFixed(2)}"/>`; }
+  }
+  return sv + `<g opacity=".5">${cyl(KX, KY, ZB - .1, ZB + 5.4, 6, DARK, toneI, .8, 24)}</g>` + cyl(KX, KY, ZB + 4.6, ZB + 5.3, 3.6, TCOP, toneI, .6, 18) + click;
 }
 // the broken element segment: two charred stubs with a dark gap between them and black cracks. halo: a pale ring behind the gap
 // so that it stays readable when it is drawn over the water.
-function elBreakSvg(halo){
-  const p = eP(EBREAK), q = eP(EBREAK + 20), lerp = u => p.map((v, i) => v + (q[i] - v)*u), m1 = lerp(.3), m2 = lerp(.7), mid = lerp(.5);
+function elBreakSvg(halo, dz = 0){
+  const p = eP(EBREAK, dz), q = eP(EBREAK + 20, dz), lerp = u => p.map((v, i) => v + (q[i] - v)*u), m1 = lerp(.3), m2 = lerp(.7), mid = lerp(.5);
   const EM = matOf('#8d9396'), EMD = matOf('#4a403a'), [X, Y] = P(...mid), [X1, Y1] = P(...m1), [X2, Y2] = P(...m2);
   const ell = (rx, ry, c, o) => `<ellipse cx="${f(X)}" cy="${f(Y)}" rx="${(rx*CAM_K).toFixed(2)}" ry="${(ry*CAM_K).toFixed(2)}" fill="${c}" opacity="${o}"/>`;
   return (halo ? ell(5, 3.8, '#fff4d6', .8) : '') + rod(p, m1, 1.3, EM, toneI, .5, 1.3, 10) + rod(m2, q, 1.3, EM, toneI, .5, 1.3, 10)
@@ -1278,9 +1388,10 @@ function elBreakSvg(halo){
 // the two floor-level faults again, on top of the water and the ghosted shell (which would wash them out); a pale halo makes them read
 function faultTop(st){
   let s = '';
-  if (st.elBroken) s += part('element', elBreakSvg(true));
-  if (st.loose){ const [X, Y] = P(KX + 1, KY - 1, ZB + 3);
-    s += part('kontakt', `<ellipse cx="${f(X)}" cy="${f(Y)}" rx="${(8*CAM_K).toFixed(2)}" ry="${(6*CAM_K).toFixed(2)}" fill="#fff4d6" opacity=".8"/>` + kontaktSvg(st)); }
+  const e = elRep(st);
+  if (e.broken && e.show && e.op > .02) s += part('element', e.op < 1 ? `<g opacity="${f(e.op)}">${elBreakSvg(true, e.dz)}</g>` : elBreakSvg(true, e.dz));
+  if (st.loose){ const [X, Y] = P(KX + 1, KY - 1, ZB + 3), kr = repT(st, 'kontakt');
+    s += part('kontakt', `<ellipse cx="${f(X)}" cy="${f(Y)}" rx="${(8*CAM_K).toFixed(2)}" ry="${(6*CAM_K).toFixed(2)}" fill="#fff4d6" opacity="${(.8*(1 - clamp01((kr - 1)/.4))).toFixed(2)}"/>` + kontaktSvg(st)); }
   return s;
 }
 function kettleMech(st, k){
@@ -1289,15 +1400,16 @@ function kettleMech(st, k){
   const live = powered ? '#ff6a2a' : !st.loose ? '#b5482d' : '#8a3a24', liveSw = powered ? '#ff6a2a' : '#8a3a24', neu = '#3d6fb8';
   // ---- under the floor: connector socket with the pin in it, element, boil-dry disc, wiring
   put([[KX - 6, KY - 6, ZB - .1], [KX + 6, KY + 6, ZB + 5.4]], part('kontakt', kontaktSvg(st)));
-  const eg = st.glow, base = '#8d9396', ec = eg > .02 ? mix(base, '#ff5a1f', eg) : base, EM = matOf(ec);
-  for (let a = 200; a < 520; a += 20){ const p = eP(a), q = eP(a + 20);
+  const eg = st.glow, base = '#8d9396', ec = eg > .02 ? mix(base, '#ff5a1f', eg) : base, EM = matOf(ec), er = elRep(st);
+  for (let a = 200; er.show && er.op > .02 && a < 520; a += 20){ const p = eP(a, er.dz), q = eP(a + 20, er.dz);
     let sv;
-    if (st.elBroken && a === EBREAK) sv = elBreakSvg(false);
+    if (er.broken && a === EBREAK) sv = elBreakSvg(false, er.dz);
     else {
       sv = rod(p, q, 1.3, EM, toneI, .5, 1.3, 10);
       if (eg > .05) sv += `<path d="${pd([p, q], false)}" fill="none" stroke="#ff8a3d" ${mw(3.4)} opacity="${f(.55*eg)}" stroke-linecap="round" filter="url(#tsSoft)" pointer-events="none"/>`;
     }
-    put(kBoxOf([p, q]).map((c, i) => [c[0], c[1], i ? EZ + 1.3 : EZ - 1.3]), part('element', sv)); }
+    if (er.op < 1) sv = `<g opacity="${f(er.op)}">${sv}</g>`;
+    put(kBoxOf([p, q]).map((c, i) => [c[0], c[1], i ? EZ + 1.3 + er.dz : EZ - 1.3 + er.dz]), part('element', sv)); }
   // cold tails at the back of the horseshoe
   for (const a of [160, 200]){ const p = eP(a); put([[p[0] - 2.5, p[1] - .6, ZB + 1.4], [p[0] + .6, p[1] + .6, EZ]], part('element', rod(p, [p[0] - 2, p[1], ZB + 2], .7, METAL, toneI, .5))); }
   put([[KX - 25.2, KY - 10.2, ZB + 2.9], [KX - 20.8, KY - 5.8, ZB + 4.4]], cyl(KX - 23, KY - 8, ZB + 2.9, ZB + 4.4, 2.2, TCOP, toneI, .6, 16));    // boil-dry disc
@@ -1316,11 +1428,20 @@ function kettleMech(st, k){
       // the limescale plug: lumpy chalky blobs filling and crusting the inlet
       // (offsets in model units around the inlet mouth; drawn outline first, then the fills, so the lumps merge into one crust)
       const lumps = [[0,0,0,2.2],[.8,1.8,1.1,1.6],[.4,-1.9,.7,1.7],[1.7,.4,-1.4,1.5],[-.8,.9,1.8,1.3],[1.4,-1,1.7,1.2],[2.4,0,.4,1.3],[-1.3,-.7,-.9,1.2],[1.1,2,-.9,1.1],[-.4,-2.2,-.8,1],[2,1.4,1.4,1]];
-      const lp = lumps.map(([dx, dy, dz, r]) => [...P(TUBE[0][0] + dx*1.5, TUBE[0][1] + dy*1.5, TUBE[0][2] + dz*1.5), r*1.5*CAM_K]);
-      crust += lp.map(([X, Y, r]) => `<circle cx="${f(X)}" cy="${f(Y)}" r="${(r + .9*INK_K).toFixed(2)}" fill="${INK}"/>`).join('')
-        + lp.map(([X, Y, r]) => `<circle cx="${f(X)}" cy="${f(Y)}" r="${r.toFixed(2)}" fill="#f4f0e2"/>`).join('');
-      for (const [dx, dy, dz] of [[.5,.3,.4],[-.3,-1.1,1.2],[1.5,.8,-.5],[.8,-1.4,-.2],[2.1,-.2,1],[-.6,1.2,.2]]){ const [X, Y] = P(TUBE[0][0] + dx, TUBE[0][1] + dy, TUBE[0][2] + dz);
-        crust += `<circle cx="${f(X)}" cy="${f(Y)}" r="${(.45*CAM_K).toFixed(2)}" fill="#cbbf9a"/>`; }
+      // repair (st.rep.kalk, seconds): A 0-.6 the crust cracks (it shakes) | B from .6 s, lump by lump, each falls through the water
+      // (.8 s, speeding up) and fades as it lands | C the last .6 s the tube is clear
+      const kr = repT(st, 'kalk'), fz = TUBE[0][2] - (ZF + 1);
+      const lp = lumps.map(([dx, dy, dz, r], j) => { let fall = 0, al = 1, jx = 0, jy = 0, rs = 1;
+        if (kr >= 0){ const t0 = .6 + j*.06, u = clamp01((kr - t0)/.8);
+          if (kr < t0){ const w = Math.min(1, kr/.3); jx = Math.sin(kr*70 + j*2)*.3*w; jy = Math.cos(kr*63 + j)*.3*w; }
+          fall = fz*Math.pow(u, 1.6); al = u > .7 ? 1 - (u - .7)/.3 : 1; rs = 1 - .35*u; }
+        return [...P(TUBE[0][0] + dx*1.5 + jx, TUBE[0][1] + dy*1.5 + jy, TUBE[0][2] + dz*1.5 - fall), r*1.5*CAM_K*rs, al]; }).filter(l => l[3] > .01);
+      const oa = al => al < 1 ? ` opacity="${al.toFixed(2)}"` : '';
+      crust += lp.map(([X, Y, r, al]) => `<circle cx="${f(X)}" cy="${f(Y)}" r="${(r + .9*INK_K).toFixed(2)}" fill="${INK}"${oa(al)}/>`).join('')
+        + lp.map(([X, Y, r, al]) => `<circle cx="${f(X)}" cy="${f(Y)}" r="${r.toFixed(2)}" fill="#f4f0e2"${oa(al)}/>`).join('');
+      const spA = kr < 0 ? 1 : 1 - clamp01(kr/1.2);
+      if (spA > .01) for (const [dx, dy, dz] of [[.5,.3,.4],[-.3,-1.1,1.2],[1.5,.8,-.5],[.8,-1.4,-.2],[2.1,-.2,1],[-.6,1.2,.2]]){ const [X, Y] = P(TUBE[0][0] + dx, TUBE[0][1] + dy, TUBE[0][2] + dz);
+        crust += `<circle cx="${f(X)}" cy="${f(Y)}" r="${(.45*CAM_K).toFixed(2)}" fill="#cbbf9a"${oa(spA)}/>`; }
     }
     tb = part('angror', tb + crust + tubeSteam(st, true));
     if (st.water > .02){
@@ -1341,7 +1462,7 @@ function kettleMech(st, k){
     let sm = '';
     if (st.steam > .02 && st.water > .02){ const zW = zWater(st.water), top = ZT - 2, n = Math.max(2, Math.floor((top - zW)/3.2));
       [[8, 6], [-6, 10], [4, -10], [-14, -2]].forEach(([dx, dy], i) => { sm += wisp([KX + dx, KY + dy, zW + .5], i*1.9, n, (top - zW - .5)/n, .8, [-.35, 0], st.steam, 3.2).svg; });
-      if (st.kalk) sm += wisp([KX - 16, KY + 1, ZT - 12], 4.2, 3, 2.2, 1.6, [.9, 0], st.steam*.8, 2).svg;
+      if (st.kalk && !(repT(st, 'kalk') > 2)) sm += wisp([KX - 16, KY + 1, ZT - 12], 4.2, 3, 2.2, 1.6, [.9, 0], st.steam*.8, 2).svg;
       sm = `<g filter="url(#tsSoft)" pointer-events="none">${sm}</g>`; }
     const svg = facing([-1,0,0]) ? w + tb + sm : tb + w + sm;
     put([[KX - 31.2, KY - 31.2, ZF], [KX + 31.2, KY + 31.2, ZT]], svg); }
@@ -1378,7 +1499,7 @@ function kettleMech(st, k){
     { at: [CX, KY, DZ + .6], text: partName('bimetall'), on: d > .05 },
     { at: [KX - 47, KY - 4.2, ZB + 4.5], text: partName('vippbrytare'), on: st.on },
     ...(facing([0,1,0]) ? [{ at: [KX - 47, HOUS.y1 + .2, ZB + 13.7], text: partName('lampa'), on: lampLit(st) }] : []) ];
-  return byDepth(parts);
+  return byDepthL(parts);
 }
 let MECH_ITEMS = [];
 // inside the base: live and neutral from the grommet to the connector pin
@@ -1452,7 +1573,9 @@ function scene(st, m){
     { box:[[STRIP.x0, STRIP.y0, TZ], [STRIP.x1, STRIP.y1, TZ + STRIP.h]], svg: rbStrip(st) },
     { box:[[-1.5, 144.5, TZ], [STRIP.x0, 147.5, TZ + 5.6]], svg: rbStripCord() },
     ...cordItems() ];
-  s += byDepth(items);
+  // layers: the board, shadows and bench props and the kettle's still parts are the same every frame, so the engine does not redraw them
+  const layers = [s, ...byDepthL(items)];
+  s = '';
 
   // labels: inside parts and their names above everything (see-through), or the surface parts otherwise
   if (k > .6) s += xrCallouts(MECH_ITEMS, [HOUS.x0, SPOUT_C[0], KY - BR, KY + BR, TZ, ZT + 4]);
@@ -1466,7 +1589,7 @@ function scene(st, m){
       { at: [KX - 53.5, KY, ZB + 50], text: partName('handtag'), on: false },
       { at: [KX + (BR - .5)*Math.cos(ba), KY + (BR - .5)*Math.sin(ba), TZ + 4.5], text: partName('sockel'), on: st.on && !st.loose },
       { at: [KX - BR - 6.15, 129, TZ + 1.2], text: partName('sladd'), on: false } ], [0, BNW, 0, BND, 0, ZT + 8]); }
-  return s;
+  return [...layers, s];
 }
 
 /* ---------- behaviour (one state object, one clock) ---------- */
@@ -1547,6 +1670,21 @@ function startPress(st){
   runLoop();
 }
 
+const clearKalk = st => { st.kalk = false; st.warned = false; runLoop(); };
+const clearElement = st => { st.elBroken = false; st.warned = false; runLoop(); };
+const clearKontakt = st => { st.loose = false; runLoop(); };
+const repairGen = {};
+function repairing(kind, total, clear){
+  return (st, u, done) => {
+    const id = repairGen[kind] = (repairGen[kind] || 0) + 1, t0 = performance.now();
+    (st.rep = st.rep || {})[kind] = 0;
+    u.animate(() => { if (id !== repairGen[kind]) return false;       // cancelled by reset
+      const t = (performance.now() - t0) / 1000;
+      if (t < total){ st.rep[kind] = t; return true; }
+      delete st.rep[kind]; clear(st); done(); return false; });
+  };
+}
+
 ui = mountFigure({
   turn:'full', size:[BNW, BND, ZT + 8], center:[BNW/2, BND/2], palette:'cobalt',
   // water 0..1 (level), temp 0..1 (1 = boiling), glow 0..1 (element), steam 0..1, disc 0..1 (0 flat, 1 snapped)
@@ -1561,13 +1699,15 @@ ui = mountFigure({
         if (v === 'boiling'){ st.temp = 1; st.glow = 1; } else if (st.temp >= 1) st.temp = .5; }
       lastPower = powerOf(st); runLoop(); } } },
   faults: {
-    // a fault changes what the sim does from now on, so the loop is (re)started; clearing while the switch is on lets it carry on
-    'kalk-i-angror':     { apply: (st) => { st.kalk = true; st.warned = false; runLoop(); },     clear: (st) => { st.kalk = false; st.warned = false; runLoop(); } },
-    'trasigt-element':   { apply: (st) => { st.elBroken = true; st.warned = false; runLoop(); }, clear: (st) => { st.elBroken = false; st.warned = false; runLoop(); } },
-    'glapp-i-kontakten': { apply: (st) => { st.loose = true; runLoop(); },                       clear: (st) => { st.loose = false; runLoop(); } },
+    // a fault changes what the sim does from now on, so the loop is (re)started; clearing while the switch is on lets it carry on.
+    // repair (clearFault with animate): the drawing follows st.rep[kind] for the given seconds (see "repair animations" above), then
+    // the fault is cleared exactly as clear() does and done() is called
+    'kalk-i-angror':     { apply: (st) => { st.kalk = true; st.warned = false; runLoop(); },     clear: clearKalk,    repair: repairing('kalk', 2.6, clearKalk) },
+    'trasigt-element':   { apply: (st) => { st.elBroken = true; st.warned = false; runLoop(); }, clear: clearElement, repair: repairing('element', 2.4, clearElement) },
+    'glapp-i-kontakten': { apply: (st) => { st.loose = true; runLoop(); },                       clear: clearKontakt, repair: repairing('kontakt', 2.0, clearKontakt) },
   },
   controls: { start: (st) => startPress(st) },
-  onReset: () => { loopGen++; loopOn = false; lastPower = 'off'; },
+  onReset: () => { loopGen++; loopOn = false; lastPower = 'off'; for (const k in repairGen) repairGen[k]++; },
   acts: { switch: (st) => { startPress(st); PILLA_EV.emit('control', { id: 'start' }); } },
   params: (st, q) => {
     for (const k of ['water', 'temp', 'disc']) if (q.has(k)) st[k] = +q.get(k);
@@ -1646,12 +1786,12 @@ html body .kpad .go small{display:none}html body .kpad .go.down{transform:transl
   let seen = null; const watch = () => { const t = document.getElementById("toast"); if (!t || t === seen) return; seen = t;
     const zw = document.querySelector(".zwrap"); if (zw && t.parentNode !== zw) zw.appendChild(t);   // sits on the figure itself
     new MutationObserver(cap).observe(t, { childList: true, characterData: true, subtree: true }); cap(); };
-  watch(); const st = document.querySelector(".stage"); if (st) new MutationObserver(watch).observe(st, { childList: true }); })();</script><script>(() => { const fix = () => { const art = document.getElementById('art'); if (!art) return;
-    for (const el of art.querySelectorAll('[fill="#41538f" i]')){ let top = null, a = el.parentElement;
+  watch(); const st = document.querySelector(".stage"); if (st) new MutationObserver(watch).observe(st, { childList: true }); })();</script><script>(() => { const art = document.getElementById('art'); if (!art) return;
+  // after every render, on the elements it wrote (ui.changed): a layer that was not redrawn needs no work
+  const fix = root => { for (const el of root.querySelectorAll('[fill="#41538f" i]')){ let top = null, a = el.parentElement;
       while (a && a !== art){ const o = a.getAttribute('opacity'); if (o !== null && +o < 1) top = a; a = a.parentElement; }
       if (top) top.parentNode.insertBefore(el, top); } };
-  const go = () => { const art = document.getElementById('art'); if (!art) return setTimeout(go, 50); fix(); new MutationObserver(fix).observe(art, { childList: true }); };
-  if (document.readyState === 'loading') addEventListener('DOMContentLoaded', go); else go(); })();</script><style>.lgd{display:none}@media (max-width:560px){html:not(.nolabels) .lgd.has{display:grid}}
+  fix(art); PILLA_EV.on('rendered', u => { for (const el of u.changed || []) fix(el); }); })();</script><style>.lgd{display:none}@media (max-width:560px){html:not(.nolabels) .lgd.has{display:grid}}
 .lgd{grid-template-columns:1fr 1fr;gap:2px 8px;margin:4px 0 12px;font:700 10.5px/1.25 ui-monospace,Menlo,monospace;letter-spacing:.03em;color:#231e16}
 .lgd button{all:unset;display:flex;align-items:center;gap:6px;cursor:pointer;padding:4px;border-radius:7px;-webkit-tap-highlight-color:transparent}
 .lgd b{flex:none;min-width:17px;height:17px;padding:0 3px;box-sizing:border-box;border-radius:999px;border:1.2px solid #231e16;background:#fff4d6;text-align:center;font:800 10px/15px ui-monospace,Menlo,monospace}
@@ -1676,5 +1816,5 @@ html body .kpad .go small{display:none}html body .kpad .go.down{transform:transl
     lg.classList.toggle("has", a.length > 0);
     lg.innerHTML = a.map(([n, [t, on]]) => `<button data-n="${n}" class="${on ? "on" : ""}"><b>${n}</b><span>${t}</span></button>`).join(""); mark(); };
   lg.addEventListener("click", e => { const b = e.target.closest("button"); if (!b) return; sel = sel === +b.dataset.n ? 0 : +b.dataset.n; mark(); });
-  new MutationObserver(() => { renum(); if (!q) q = requestAnimationFrame(upd); }).observe(fig, { childList: true, subtree: true }); renum();
+  PILLA_EV.on('rendered', u => { if (innerWidth > 560 || !(u.changed || []).length) return; renum(); if (!q) q = requestAnimationFrame(upd); }); renum();
   addEventListener("resize", () => { if (!q) q = requestAnimationFrame(upd); }); upd(); })();</script></body></html>

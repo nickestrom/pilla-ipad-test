@@ -1,0 +1,149 @@
+{
+  "schemaVersion": 2,
+  "id": "brodrost",
+  "kind": "machine",
+  "name": { "sv": "Brödrost" },
+  "summary": { "sv": "Se hur en brödrost rostar brödet och får det att hoppa upp. Och vad som händer när något går sönder." },
+  "category": "kök",
+  "concepts": [
+    { "id": "varme-ur-strom", "part": "glodtrad" },
+    { "id": "strombrytare", "part": "sparr" },
+    { "id": "fjader", "part": "fjader" }
+  ],
+  "ageMin": 5,
+  "parts": [
+    {
+      "id": "spak",
+      "name": { "sv": "Spak" },
+      "say": { "sv": "Tryck ner spaken, så fastnar brödet nere och rostningen börjar." },
+      "why": { "sv": "När du trycker ner spaken fäster en hake brödhållaren. Samtidigt sluts en strömbrytare, så strömmen kan gå till glödtrådarna." },
+      "tappable": true
+    },
+    {
+      "id": "slits",
+      "name": { "sv": "Brödfack" },
+      "say": { "sv": "Här stoppar du ner brödet. Det lyser rött av värme längst ner i facket." },
+      "tappable": true
+    },
+    {
+      "id": "brod",
+      "name": { "sv": "Bröd" },
+      "say": { "sv": "Värmen gör brödet brunt, på båda sidor. Ju längre det rostar, desto mörkare blir det." },
+      "why": { "sv": "Värme får sockret i brödet att bli brunt och krispigt. Därför blir en sida blek om den inte får någon värme." },
+      "tappable": true
+    },
+    {
+      "id": "vagn",
+      "name": { "sv": "Brödhållare" },
+      "say": { "sv": "Den håller brödet och glider ner när du trycker på spaken. Fjädern drar upp den igen." },
+      "tappable": true,
+      "visibleIn": ["xray"]
+    },
+    {
+      "id": "fjader",
+      "name": { "sv": "Fjäder" },
+      "say": { "sv": "En lång fjäder som vill dra ihop sig. Den drar upp brödhållaren, så brödet hoppar upp." },
+      "why": { "sv": "Fjädern sträcks när du trycker ner spaken och sparar kraften. När haken släpper drar den tillbaka, och brödet hoppar upp." },
+      "visibleIn": ["xray"],
+      "tappable": true
+    },
+    {
+      "id": "glodtrad",
+      "name": { "sv": "Glödtråd" },
+      "say": { "sv": "En tunn tråd som blir het när strömmen går igenom, som en spisplatta. Dra ur sladden först." },
+      "why": { "sv": "Tråden är så tunn att strömmen har svårt att ta sig fram. Då blir den het och glöder. El blir värme." },
+      "visibleIn": ["xray"],
+      "tappable": true
+    },
+    {
+      "id": "varmekort",
+      "name": { "sv": "Värmekort" },
+      "say": { "sv": "Ett platt kort av glimmer som glödtråden är lindad på. Det tål värmen." },
+      "why": { "sv": "Glimmer är en sten som tål mycket värme och inte leder ström. Därför kan glödtråden sitta rakt på kortet." },
+      "visibleIn": ["xray"],
+      "tappable": true
+    },
+    {
+      "id": "bimetall",
+      "name": { "sv": "Bimetallbricka" },
+      "say": { "sv": "Två metaller ihop. När de blir varma böjer den sig och knuffar loss haken." },
+      "why": { "sv": "Metallerna växer olika mycket när de blir varma. Därför böjer sig brickan. Böjer den sig nog, lossar haken och brödet hoppar upp." },
+      "visibleIn": ["xray"],
+      "tappable": true
+    },
+    {
+      "id": "sparr",
+      "name": { "sv": "Spärr" },
+      "say": { "sv": "Haken som håller fast brödhållaren nere. När brickan böjer sig släpper den." },
+      "why": { "sv": "Spärren håller brödhållaren nere och strömmen på. När den släpper, bryts strömmen och fjädern lyfter brödet." },
+      "visibleIn": ["xray"],
+      "tappable": true
+    },
+    {
+      "id": "ratt",
+      "name": { "sv": "Ratt" },
+      "say": { "sv": "Med ratten väljer du hur mörkt brödet ska bli." },
+      "why": { "sv": "Ratten bestämmer hur långt brickan ska böja sig innan haken släpper. Böjer den lite blir brödet ljust, mycket blir det mörkt." },
+      "tappable": true
+    },
+    {
+      "id": "sladd",
+      "name": { "sv": "Sladd" },
+      "say": { "sv": "Sladden tar strömmen från väggen. Dra alltid ur den först, innan du tittar inuti." },
+      "tappable": true
+    },
+    {
+      "id": "smulbricka",
+      "name": { "sv": "Smulbricka" },
+      "say": { "sv": "Smulor ramlar ner hit. Dra ur sladden först, så kan du skaka ur dem." },
+      "visibleIn": ["xray"],
+      "tappable": true
+    }
+  ],
+  "controls": [
+    { "id": "start", "label": { "sv": "Tryck ner" }, "type": "button", "part": "spak" }
+  ],
+  "states": {
+    "phase": { "values": ["up", "toasting", "popped"], "default": "up" },
+    "xray": { "values": [false, true], "default": false }
+  },
+  "readings": {
+    "phase": { "type": "enum", "values": ["up", "toasting", "popped"] },
+    "rostning": { "type": "int", "min": 0, "max": 100, "unit": "%" }
+  },
+  "faults": [
+    {
+      "id": "trasig-fjader",
+      "symptom": { "sv": "Brödet rostas, men det hoppar aldrig upp." },
+      "culprit": "fjader",
+      "fix": { "type": "tap", "hint": { "sv": "Titta inuti. Tryck på det som ska lyfta brödet." } },
+      "explain": { "sv": "Fjädern har gått av. Haken släpper, men inget lyfter brödhållaren. Då blir brödet kvar nere." }
+    },
+    {
+      "id": "trasig-glodtrad",
+      "symptom": { "sv": "Brödet blir rostat bara på ena sidan. Andra sidan är blek." },
+      "culprit": "glodtrad",
+      "fix": { "type": "tap", "hint": { "sv": "Titta inuti. Tryck på tråden som aldrig blir het." } },
+      "explain": { "sv": "En glödtråd har gått av. Strömmen kommer inte igenom, så kortet blir kallt. Dra ur sladden innan du byter." }
+    },
+    {
+      "id": "sprucken-bimetall",
+      "symptom": { "sv": "Rostningen slutar aldrig. Brödet blir mörkare och mörkare." },
+      "culprit": "bimetall",
+      "fix": { "type": "tap", "hint": { "sv": "Titta inuti. Tryck på brickan som ska böja sig." } },
+      "explain": { "sv": "Brickan har spruckit, så den böjer sig aldrig. Haken släpper inte, och brödet rostar tills du drar ur sladden." }
+    }
+  ],
+  "missions": [
+    {
+      "id": "rosta-brod",
+      "steps": [
+        { "say": { "sv": "Tryck ner spaken." }, "done": { "event": "control", "id": "start" } },
+        { "say": { "sv": "Titta inuti. Vilken tråd blir het?" }, "done": { "event": "tap", "part": "glodtrad" } },
+        { "say": { "sv": "Vilken bricka böjer sig och släpper haken?" }, "done": { "event": "tap", "part": "bimetall" } }
+      ]
+    }
+  ],
+  "realWorld": { "sv": "Leta rätt på spaken på er riktiga brödrost. Stoppa aldrig in kniv eller gaffel!" },
+  "generatedBy": { "skill": "pilla-figure", "version": "m1-hand", "date": "2026-11-01" }
+}

@@ -47,7 +47,7 @@ let CAM_LIM = null;
 /* ---------- Pilla: one tiny event bus + input/camera lock flags ----------
    PILLA_EV.emit(type, payload) is how the engine reports what the child did (tap, control, stateChanged, paramChanged,
    viewChanged, fixAttempt); bridge.js subscribes and forwards to the app. 'mounted' (once, {ui, cfg}) and 'rendered'
-   (after every draw) are internal. Handlers never break the engine: a throwing handler is rethrown asynchronously. */
+   (after every draw; the payload ui has ui.changed) are internal; 'repaired {fault}' is a repair animation that has played to the end. Handlers never break the engine: a throwing handler is rethrown asynchronously. */
 const PILLA_EV = (() => { const h = {}; return {
   on(type, fn){ (h[type] || (h[type] = [])).push(fn); },
   emit(type, payload){ for (const fn of (h[type] || []).slice()){ try { fn(payload); } catch (e) { setTimeout(() => { throw e; }); } } } }; })();
@@ -79,7 +79,11 @@ const boxMid = b => [0,1,2].map(k => (b[0][k] + b[1][k]) / 2);
 const sepOrder = (p, q) => { if (!p.box || !q.box) return 0;
   for (let k = 0; k < 3; k++){ if (p.box[1][k] <= q.box[0][k] + 1e-6) return CAM_V[k] >= 0 ? -1 : 1; if (q.box[1][k] <= p.box[0][k] + 1e-6) return CAM_V[k] >= 0 ? 1 : -1; }
   return 0; };
-const byDepth = parts => parts.filter(Boolean).sort((p,q) => sepOrder(p,q) || (depthOf(p.at || boxMid(p.box)) - depthOf(q.at || boxMid(q.box)))).map(p => p.svg).join('');
+const depthSorted = parts => parts.filter(Boolean).sort((p,q) => sepOrder(p,q) || (depthOf(p.at || boxMid(p.box)) - depthOf(q.at || boxMid(q.box))));
+const byDepth = parts => depthSorted(parts).map(p => Array.isArray(p.svg) ? p.svg.join('') : p.svg).join('');
+// byDepthL: the same order, but returned as an array of strings (one per part, nested arrays flattened in place), so that
+// scene() can return layers: a part whose drawing did not change since the last frame is then not redrawn (see mountFigure)
+const byDepthL = parts => depthSorted(parts).flatMap(p => p.svg);
 // the half of a vertical ring that faces the viewer / is turned away, as [from, to] angles in degrees (0 = +x, 90 = +y)
 const nearHalf = () => [YAW - 90, YAW + 90], farHalf = () => [YAW + 90, YAW + 270];
 // an open container (cup, bin, cone, drum) between two rings: far inner wall, then its contents, then the near outer wall
@@ -350,6 +354,7 @@ const PILLA_CSS = `
   @keyframes hlpulse{0%,100%{opacity:1}50%{opacity:.3}}
   html.inlock #fig, html.inlock .actions{pointer-events:none}
   html.nofx #art{filter:none!important} html.fx #art{filter:url(#hand)!important}
+  html.noblur #art [filter]{filter:none!important}
   #fps{position:fixed;right:6px;bottom:6px;z-index:9;font:700 12px ui-monospace,Menlo,monospace;background:rgba(35,30,22,.75);color:#fff;padding:2px 7px;border-radius:6px;pointer-events:none}
   html.pilla body{display:block;padding:0;height:100%;overflow:hidden}
   html.pilla header, html.pilla .controls, html.pilla .made-with, html.pilla .zchip{display:none!important}
@@ -374,7 +379,13 @@ const filterFor = k => `<filter id="hand" x="-3%" y="-3%" width="106%" height="1
      size:[W,D,H],                 // bounding box, used to frame the view (shadow range included)
      palette:'mustard',            // default PALS key
      state:{...},                  // figure state (st.pal is built in)
-     scene: (st, m) => svgString,  // m = current palette {l,m,d}
+     scene: (st, m) => svgString,  // m = current palette {l,m,d}. May instead return an ARRAY of strings = layers, back to front
+                                   //   (use byDepthL(parts) instead of byDepth). Each layer is its own <g>; a layer whose string is
+                                   //   identical to last frame's is not written to the DOM, so the browser does not re-parse, re-style
+                                   //   or repaint it. A string equal to last frame's is not written either. Keep still parts and
+                                   //   moving parts in separate layers: cost per frame follows what CHANGED, not what is drawn.
+                                   //   A layer may also be { g:{opacity:'.2'}, kids:[...layers] }: a group whose kids are layers too.
+                                   //   ui.changed lists the elements written by the last render ([art] for a string).
      readout: st => 'text',        // status line under the figure
      buttons: [{label, onClick(st, ui)}      // listed in the order the user should do them
                | {label, choices: st => [{label, onClick(st,ui), current?, disabled?, why?}]}],   // opens a picker
@@ -391,7 +402,12 @@ const filterFor = k => `<filter id="hand" x="-3%" y="-3%" width="106%" height="1
                                    // how a manifest param is read and written ("params" is the URL-param reader above).
                                    //   set() is called when a dragged part lands, and for setParam.
      states: { key: { get: st => value, set: (st, value, ui) => void } },   // for manifest.states; 'xray' is built in
-     faults: { faultId: { apply: (st, ui) => void, clear: (st, ui) => void } },   // idempotent
+     faults: { faultId: { apply: (st, ui) => void, clear: (st, ui) => void, repair?: (st, ui, done) => void } },   // apply/clear idempotent
+                                   //   repair (optional): plays the repair animation (1.2-3 s, no step shorter than 0.6 s) that ends in
+                                   //   exactly the state clear() leaves, and calls done() exactly once when it ends. Started by
+                                   //   ui.clearFault(id, {animate:true}); the fault counts as active until done() runs, then the engine
+                                   //   marks it cleared and emits 'repaired {fault}'. reset() cancels it (stop your own timers in onReset;
+                                   //   done.cancelled is true then). Use ui.animate(step) for the motion.
      controls: { controlId: (st, ui) => void },   // one button per manifest control of type "button" (control.label.sv, in
                                    //   manifest order); a child press emits 'control {id}'. "buttons" still works beside it.
      onReset: (st, ui) => void,    // optional: stop the figure's own timers/loops when ui.reset() runs
@@ -400,7 +416,7 @@ const filterFor = k => `<filter id="hand" x="-3%" y="-3%" width="106%" height="1
    })  -> ui = { st, render, animate(stepFn), flash(text,ms),
                  invalidate(), camTo(yaw,pitch,ms), settled(), reset(), highlight(part, style, ms), lockInput(on), lockParam(param,on),
                  lockCamera(on), setXray(on), rotateTo(view), setParam(param,value,animate), setState(key,value), press(id),
-                 applyFault(id), clearFault(id), readings(), partIds(), camera(), view() }
+                 applyFault(id), clearFault(id, {animate}), readings(), partIds(), camera(), view() }
    animate(step): calls step(dt seconds) every frame and re-renders until step returns false.
    settled(): no running animation step, no active drag (camera or part), no glide.
    reset(): deep copy of the initial state (taken after params(st,q)) back into st, faults cleared, highlight and locks
@@ -459,6 +475,8 @@ function mountFigure(cfg){
   const html = document.documentElement;
   if (q.get('chrome') !== '1') html.classList.add('pilla');
   if (q.get('fx') === '0') html.classList.add('nofx'); else if (q.get('fx') === '1') html.classList.add('fx');
+  // ?blur=0: drop every filter inside the drawing (glows, soft steam), to measure what they cost on a slow tablet
+  if (q.get('blur') === '0') html.classList.add('noblur');
   document.body.innerHTML = `
     <header><h1>Fig. ${cfg.fig} — ${cfg.title}</h1></header>
     <div class="stage">
@@ -509,7 +527,7 @@ function mountFigure(cfg){
 
   const art = document.getElementById('art'), readout = document.getElementById('readout'), hl = document.getElementById('hl');
   const ui = { st }; PL.cfg = cfg; PL.ui = ui;
-  const lockedP = new Set(), faultsOn = new Set();
+  const lockedP = new Set(), faultsOn = new Set(), repairing = new Map();   // repairing: fault id -> { cancelled } while its repair animation runs
   let hlSpec = null, hlTimer = 0;
   // highlight: a rounded rect around the union of every [data-part=part] box, drawn in #hl (after #art, outside the filter)
   const drawHl = () => { hl.innerHTML = ''; if (!hlSpec) return;
@@ -526,8 +544,51 @@ function mountFigure(cfg){
       + `<rect ${rr} style="fill:var(--accent,#f4b829)" fill-opacity=".14" stroke="none"/>`; };
   ui.highlight = (partId, style = 'glow', ms) => { clearTimeout(hlTimer); hlSpec = partId ? { part: partId, style } : null; drawHl();
     if (hlSpec && ms > 0) hlTimer = setTimeout(() => ui.highlight(''), ms); };
-  ui.render = () => { _clipN = 0; document.documentElement.style.setProperty('--accent', PALS[st.pal].l); art.innerHTML = inkScale(cfg.scene(st, PALS[st.pal])); if (!ui._flash) readout.textContent = cfg.readout ? cfg.readout(st) : ''; if (ui.drawStats) ui.drawStats();
-    drawHl(); PILLA_EV.emit('rendered', ui); };
+  // Drawing the scene. scene() may return one string (the whole drawing, as always) or an array of layer nodes (back to
+  // front; usually strings). Each layer lives in its own <g>; a layer whose string is the same as last frame is left alone, so the browser
+  // does not re-parse, re-style or repaint it. A single string that did not change is not written either.
+  // ui.changed = the elements written this render ([art] for a string, the layer <g>s for an array, [] if nothing changed).
+  // A layer node is a string, an array of nodes (flattened in place), or { g: {attr: value}, kids: [nodes] }: a <g> with those
+  // attributes (a translucent group, say) whose kids are layers in their own right, so one group can hold still and moving parts.
+  // Do not put castShadow() fills inside a { g } node with opacity < 1 (the page moves them out of translucent groups).
+  let lastWhole = null, layerState = [];
+  const nodesToString = n => Array.isArray(n) ? n.map(nodesToString).join('') : n !== null && typeof n === 'object'
+    ? `<g ${Object.entries(n.g || {}).map(([k, v]) => `${k}="${v}"`).join(' ')}>${nodesToString(n.kids || [])}</g>` : (n || '');
+  const NS_SVG ='http://www.w3.org/2000/svg', flatten = (a, out = []) => { for (const n of a) if (Array.isArray(n)) flatten(n, out); else out.push(n); return out; };
+  const syncNodes = (host, state, nodes, changed) => {
+    const list = flatten(Array.isArray(nodes) ? nodes : [nodes]);
+    for (let i = 0; i < list.length; i++){
+      const n = list[i], grp = n !== null && typeof n === 'object';
+      let ent = state[i];
+      if (!ent || ent.grp !== grp){
+        const el = document.createElementNS(NS_SVG, 'g');
+        if (ent) host.replaceChild(el, ent.el); else host.appendChild(el);
+        ent = state[i] = { grp, el, str: null, key: null, sub: [] }; }
+      if (!grp){ const s = inkScale(n || ''); if (ent.str !== s){ ent.el.innerHTML = s; ent.str = s; changed.push(ent.el); } }
+      else {
+        const key = JSON.stringify(n.g || {});
+        if (ent.key !== key){ for (const a of [...ent.el.attributes]) ent.el.removeAttribute(a.name);
+          for (const [k, v] of Object.entries(n.g || {})) ent.el.setAttribute(k, v); ent.key = key; changed.push(ent.el); }
+        syncNodes(ent.el, ent.sub, n.kids || [], changed); } }
+    while (state.length > list.length) state.pop().el.remove(); };
+  const paint = res => {
+    const changed = [];
+    if (Array.isArray(res)){
+      if (lastWhole !== null){ art.textContent = ''; lastWhole = null; }
+      syncNodes(art, layerState, res, changed);
+    } else {
+      if (layerState.length){ art.textContent = ''; layerState = []; lastWhole = null; }
+      const s = inkScale(res);
+      if (s !== lastWhole){ art.innerHTML = s; lastWhole = s; changed.push(art); }
+    }
+    ui.changed = changed; };
+  ui.changed = [];
+  let lastAccent = '', lastReadout = null;
+  ui.render = () => { _clipN = 0; const ac = PALS[st.pal].l; if (ac !== lastAccent){ lastAccent = ac; document.documentElement.style.setProperty('--accent', ac); }
+    paint(cfg.scene(st, PALS[st.pal]));
+    if (!ui._flash){ const r = cfg.readout ? cfg.readout(st) : ''; if (r !== lastReadout){ lastReadout = r; readout.textContent = r; } } else lastReadout = null;
+    if (ui.drawStats) ui.drawStats();
+    if (hlSpec || hl.firstChild) drawHl(); PILLA_EV.emit('rendered', ui); };
   // big numbers in the top-right corner (credit, change, score…); a value that changes gets a little bump
   const statsEl = document.getElementById('stats'), prevStats = {};
   ui.drawStats = () => { if (!statsEl) return;
@@ -693,15 +754,34 @@ function mountFigure(cfg){
     if (key === 'xray'){ h.set(st, value, ui); return true; }     // setXray reports it itself
     h.set(st, value, ui); ui.render(); PILLA_EV.emit('stateChanged', { key, value: h.get(st) }); return true; };
   ui.applyFault = id => { const h = cfg.faults && cfg.faults[id]; if (!h) return false; if (!faultsOn.has(id)){ faultsOn.add(id); h.apply(st, ui); ui.render(); } return true; };
-  ui.clearFault = id => { const h = cfg.faults && cfg.faults[id]; if (!h) return false; if (faultsOn.has(id)){ faultsOn.delete(id); h.clear(st, ui); ui.render(); } return true; };
+  // clearFault(id, {animate}): without animate (or with no repair() on the fault) the fault is cleared at once, as always.
+  // With animate:true and a repair(st, ui, done) on the fault, the repair animation starts and the fault counts as active
+  // until the figure calls done() (exactly once, 1.2-3 s later); then it is marked cleared and 'repaired {fault}' is emitted.
+  // animate:true without a repair() clears at once and still emits 'repaired' (on the next tick, after the caller's ack), so
+  // the app has one signal to wait for. A repeated clearFault while a repair runs does nothing. reset() cancels a running
+  // repair (no 'repaired'; a later done() is ignored; done.cancelled tells the figure's own timers).
+  ui.clearFault = (id, opts) => { const h = cfg.faults && cfg.faults[id]; if (!h) return false;
+    const animate = !!(opts && opts.animate);
+    if (repairing.has(id)) return true;
+    if (animate && h.repair && faultsOn.has(id)){
+      const rec = { cancelled: false }; repairing.set(id, rec);
+      const done = () => { if (rec.cancelled || repairing.get(id) !== rec) return; repairing.delete(id); faultsOn.delete(id); ui.render(); PILLA_EV.emit('repaired', { fault: id }); };
+      Object.defineProperty(done, 'cancelled', { get: () => rec.cancelled });
+      h.repair(st, ui, done);
+      return true; }
+    if (faultsOn.has(id)){ faultsOn.delete(id); h.clear(st, ui); ui.render(); }
+    if (animate) setTimeout(() => PILLA_EV.emit('repaired', { fault: id }), 0);
+    return true; };
   ui.readings = () => cfg.readings ? cfg.readings(st) : {};
   // parts the figure can show: the ids in the drawing now, plus those only drawn with see-through on (one off-screen
   // render of the scene with xr = 1, then everything restored)
   ui.partIds = () => { const ids = new Set([...art.querySelectorAll('[data-part]')].map(g => g.dataset.part)), xr0 = st.xr, ln0 = window.__ln;
-    try { st.xr = 1; window.__ln = Object.assign({}, ln0); const s = cfg.scene(st, PALS[st.pal]); for (const m of s.matchAll(/data-part="([^"]+)"/g)) ids.add(m[1]); }
+    try { st.xr = 1; window.__ln = Object.assign({}, ln0); const r = cfg.scene(st, PALS[st.pal]), s = nodesToString(r); for (const m of s.matchAll(/data-part="([^"]+)"/g)) ids.add(m[1]); }
     catch (e) {} finally { st.xr = xr0; window.__ln = ln0; _clipN = 0; }
     return [...ids]; };
   ui.reset = () => {
+    for (const rec of repairing.values()) rec.cancelled = true;
+    repairing.clear();
     for (const id of [...faultsOn]) ui.clearFault(id);
     if (cfg.onReset) cfg.onReset(st, ui);
     for (const k of Object.keys(st)) delete st[k];
@@ -873,8 +953,12 @@ function mountKeypad(spec){
    Commands (app -> figure), each answered at once with { v:2, figure, type:'ack', seq:<the command's seq>, ok, error? }.
    Unknown part/control/param/fault/key, a wrong type or an out-of-range value gives ok:false, never a throw. All idempotent.
      highlight {part, style?, ms?}   setState {key, value}   setParam {param, value, animate?}   lockParam {param, on}
-     press {control}   setXray {on}   rotateTo {view}   lockCamera {on}   applyFault {fault}   clearFault {fault}
+     press {control}   setXray {on}   rotateTo {view}   lockCamera {on}   applyFault {fault}   clearFault {fault, animate?}
      lockInput {on}    reset {}
+     clearFault with animate:true (default false) plays the figure's repair animation (1.2-3 s) if the fault has one: the ack
+     comes at once, the fault stays active until the animation ends, then 'repaired {fault}' is sent. Without a repair
+     animation (or animate false) the fault is cleared at once; with animate:true 'repaired' is still sent, right after the ack.
+     A repeated clearFault while a repair runs is an ok no-op; reset cancels the repair (no 'repaired').
      setParam with animate (default true) glides the part along its track (>= 600 ms) when it has one and emits
      paramChanged {by:'app'} when it lands (every time, also when the value did not change, so the app can wait for it).
      rotateTo respects the figure's turning limit (a figure without turn:'full' stays within +-60 degrees of the front).
@@ -885,6 +969,7 @@ function mountKeypad(spec){
        keys of cfg.readings(st).
      tap {part}  control {id}  stateChanged {key, value}  paramChanged {param, value, by}  viewChanged {view}
      fixAttempt {fault, success} (reserved, the engine does not emit it yet)  error {code, message}
+     repaired {fault}: a clearFault with animate has played to the end (the fault is cleared now)
      reading {values, settled}: after a render in which the values changed, with settled:false, at most one per 100 ms;
        when the figure has come to rest, exactly one settled:true per rest state (again only after something moved and
        settled again). One settled reading is also sent right after ready.
@@ -931,7 +1016,8 @@ function mountKeypad(spec){
     applyFault: m => need(ids(M.faults).includes(m.fault), 'unknown fault: ' + m.fault)
       || need(ui.applyFault(m.fault), 'figure has no handler for fault ' + m.fault),
     clearFault: m => need(ids(M.faults).includes(m.fault), 'unknown fault: ' + m.fault)
-      || need(ui.clearFault(m.fault), 'figure has no handler for fault ' + m.fault),
+      || need(m.animate == null || isBool(m.animate), 'animate must be a boolean')
+      || need(ui.clearFault(m.fault, { animate: m.animate === true }), 'figure has no handler for fault ' + m.fault),
     lockInput: m => need(isBool(m.on), 'on must be a boolean') || void ui.lockInput(m.on),
     reset: () => void ui.reset(),
   };
@@ -952,7 +1038,7 @@ function mountKeypad(spec){
     try { window.parent.postMessage(ack, '*'); } catch (e) { /* nobody listens */ }
   });
 
-  for (const t of ['tap', 'control', 'stateChanged', 'paramChanged', 'viewChanged', 'fixAttempt']) PILLA_EV.on(t, p => post(t, p));
+  for (const t of ['tap', 'control', 'stateChanged', 'paramChanged', 'viewChanged', 'fixAttempt', 'repaired']) PILLA_EV.on(t, p => post(t, p));
   addEventListener('error', e => post('error', { code: 'script', message: String(e.message) }));
   addEventListener('unhandledrejection', e => post('error', { code: 'promise', message: String((e.reason && e.reason.message) || e.reason) }));
 
@@ -1232,12 +1318,12 @@ html body .kpad .go small{display:none}html body .kpad .go.down{transform:transl
   let seen = null; const watch = () => { const t = document.getElementById("toast"); if (!t || t === seen) return; seen = t;
     const zw = document.querySelector(".zwrap"); if (zw && t.parentNode !== zw) zw.appendChild(t);   // sits on the figure itself
     new MutationObserver(cap).observe(t, { childList: true, characterData: true, subtree: true }); cap(); };
-  watch(); const st = document.querySelector(".stage"); if (st) new MutationObserver(watch).observe(st, { childList: true }); })();</script><script>(() => { const fix = () => { const art = document.getElementById('art'); if (!art) return;
-    for (const el of art.querySelectorAll('[fill="#41538f" i]')){ let top = null, a = el.parentElement;
+  watch(); const st = document.querySelector(".stage"); if (st) new MutationObserver(watch).observe(st, { childList: true }); })();</script><script>(() => { const art = document.getElementById('art'); if (!art) return;
+  // after every render, on the elements it wrote (ui.changed): a layer that was not redrawn needs no work
+  const fix = root => { for (const el of root.querySelectorAll('[fill="#41538f" i]')){ let top = null, a = el.parentElement;
       while (a && a !== art){ const o = a.getAttribute('opacity'); if (o !== null && +o < 1) top = a; a = a.parentElement; }
       if (top) top.parentNode.insertBefore(el, top); } };
-  const go = () => { const art = document.getElementById('art'); if (!art) return setTimeout(go, 50); fix(); new MutationObserver(fix).observe(art, { childList: true }); };
-  if (document.readyState === 'loading') addEventListener('DOMContentLoaded', go); else go(); })();</script><style>.lgd{display:none}@media (max-width:560px){html:not(.nolabels) .lgd.has{display:grid}}
+  fix(art); PILLA_EV.on('rendered', u => { for (const el of u.changed || []) fix(el); }); })();</script><style>.lgd{display:none}@media (max-width:560px){html:not(.nolabels) .lgd.has{display:grid}}
 .lgd{grid-template-columns:1fr 1fr;gap:2px 8px;margin:4px 0 12px;font:700 10.5px/1.25 ui-monospace,Menlo,monospace;letter-spacing:.03em;color:#231e16}
 .lgd button{all:unset;display:flex;align-items:center;gap:6px;cursor:pointer;padding:4px;border-radius:7px;-webkit-tap-highlight-color:transparent}
 .lgd b{flex:none;min-width:17px;height:17px;padding:0 3px;box-sizing:border-box;border-radius:999px;border:1.2px solid #231e16;background:#fff4d6;text-align:center;font:800 10px/15px ui-monospace,Menlo,monospace}
@@ -1262,5 +1348,5 @@ html body .kpad .go small{display:none}html body .kpad .go.down{transform:transl
     lg.classList.toggle("has", a.length > 0);
     lg.innerHTML = a.map(([n, [t, on]]) => `<button data-n="${n}" class="${on ? "on" : ""}"><b>${n}</b><span>${t}</span></button>`).join(""); mark(); };
   lg.addEventListener("click", e => { const b = e.target.closest("button"); if (!b) return; sel = sel === +b.dataset.n ? 0 : +b.dataset.n; mark(); });
-  new MutationObserver(() => { renum(); if (!q) q = requestAnimationFrame(upd); }).observe(fig, { childList: true, subtree: true }); renum();
+  PILLA_EV.on('rendered', u => { if (innerWidth > 560 || !(u.changed || []).length) return; renum(); if (!q) q = requestAnimationFrame(upd); }); renum();
   addEventListener("resize", () => { if (!q) q = requestAnimationFrame(upd); }); upd(); })();</script></body></html>

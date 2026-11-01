@@ -142,6 +142,7 @@
     for (const fl of (m.faults || [])){
       const row = el('div', null, { className: 'row' }); label(row, fl.id);
       btn('apply', () => window.harness.send('applyFault', { fault: fl.id }), row); btn('clear', () => window.harness.send('clearFault', { fault: fl.id }), row);
+      btn('repair (animate)', () => window.harness.send('clearFault', { fault: fl.id, animate: true }), row);
       $('faults').appendChild(row);
     }
     $('reset').onclick = () => window.harness.send('reset', {});
