@@ -25,6 +25,19 @@ const CERAMIC = { l:'#fbfaf3', m:'#e3e0d2', d:'#bdb8a6' };
 const DARK    = { l:'#55504a', m:'#3d3935', d:'#272421' };
 const INK = '#231e16';
 const SHADOW = '#41538f';
+/* ---------- Pilla: rendering switches for speed tests (URL query; none set = the normal drawing) ----------
+   split=1   each run of layers that changes together gets its own stacked <svg> (same viewBox, its own compositing
+             layer), so a frame repaints only the svgs whose layers changed. Needs a scene that returns layers.
+   glow=grad soft glows without SVG filters: glowLine / glowFill / softStrokes / softGroup below draw stacked translucent
+             strokes and radial gradients instead of a Gaussian blur.
+   gop=0     no group opacity: every <g opacity> in the drawing is folded into fill-opacity / stroke-opacity on the shapes
+             inside it (overlapping shapes in a translucent group then show through each other a little).
+   clip=0    clip paths inside the drawing are ignored (shadows and clipped details spill over their edges).
+   dom=attr  a changed layer is parsed off-screen and the live nodes are patched attribute by attribute, instead of
+             replacing the layer's whole content with innerHTML. */
+const PILLA_OPT = (() => { const q = new URLSearchParams(location.search);
+  return { split: q.get('split') === '1', glow: q.get('glow') === 'grad' ? 'grad' : 'blur', gop: q.get('gop') !== '0',
+    clip: q.get('clip') !== '0', dom: q.get('dom') === 'attr' ? 'attr' : 'html' }; })();
 
 /* ---------- projection (x = depth toward viewer-right, y = toward viewer-left, z = up) ---------- */
 const C = Math.cos(Math.PI/6), S = Math.sin(Math.PI/6);
@@ -281,6 +294,74 @@ function tag(p3, dx, dy, text, on=false){
 }
 const clipTo = (pts3, inner) => { const id = 'k' + (++_clipN); return `<clipPath id="${id}"><path d="${pd(pts3)}"/></clipPath><g clip-path="url(#${id})">${inner}</g>`; };
 
+/* ---------- Pilla: soft glows (a hot wire, a lamp, steam) ----------
+   A figure asks for "a glow" and the engine picks the technique. The default is the figure's own Gaussian blur filter
+   (the scene's <filter id="tsSoft"> with stdDeviation GLOW_SD * INK_K). With ?glow=grad no filter is used: a glowing
+   line becomes a few stacked strokes, widest and faintest first, whose summed alpha follows the blurred stroke's profile;
+   a glowing spot becomes an ellipse over the spot's box filled with a radial gradient that follows the blurred shape's
+   profile. Both paint as plain shapes, which a tablet draws far faster than a filter.
+     glowLine(d, colour, width, opacity, extra)  a blurred stroke along path d (width in model units, not rescaled)
+     glowFill(d, colour, opacity, extra, el0)    a blurred filled spot (the outline d is taken as its box)
+     softStrokes(d, strokes, extra)              strokes [[colour, width, opacity], ...] along d, drawn in that order, of a
+                                                 soft group (steam): plain here, the group blurs them
+     softGroup(inner)                            the group that blurs its softStrokes() as one
+   opacity may be a number or the string the figure already printed (so the default drawing is unchanged). */
+const GLOW_SD = 1.4;
+const glowOn = () => PILLA_OPT.glow === 'grad';
+const erf = x => { const s = x < 0 ? -1 : 1, a = Math.abs(x), t = 1 / (1 + .3275911*a);
+  return s*(1 - (((((1.061405429*t - 1.453152027)*t) + 1.421413741)*t - .284496736)*t + .254829592)*t*Math.exp(-a*a)); };
+// a stroke of width w blurred by sd: its alpha at distance r from the centre line
+const blurLine = (w, sd) => r => .5*(erf((r + w/2)/(sd*Math.SQRT2)) - erf((r - w/2)/(sd*Math.SQRT2)));
+const hexRGB = h => [1, 3, 5].map(i => parseInt(h.substr(i, 2), 16) / 255);
+/* Bands for strokes [[colour, width, opacity], ...] along one path, each blurred by sd and laid over the one before: the
+   look at distance r from the centre line is a colour and an alpha. n bands (outermost first) are stacked plain strokes,
+   each { w: stroke width, c: colour, a: alpha }, chosen so that the stack reproduces that colour and alpha at each band's
+   middle. Band edges sit where the profile changes fastest (around the stroke's edge). */
+function softBands(strokes, sd, n){
+  const wMax = Math.max(...strokes.map(s => s[1])), R = wMax/2 + 2*sd;
+  const edges = [R, wMax/2 + 1.1*sd, wMax/2 + .35*sd, Math.max(wMax/2 - .5*sd, wMax/5), wMax/8].slice(0, n).concat([0]).sort((a, b) => b - a);
+  const look = r => { let A = 0, P = [0, 0, 0];             // premultiplied colour and alpha of the stack at r
+    for (const [c, w, op] of strokes){ const a = Math.min(.999, +op*blurLine(w, sd)(r)), rgb = hexRGB(c); P = P.map((v, i) => rgb[i]*a + v*(1 - a)); A = a + A*(1 - a); }
+    return { A, P }; };
+  const out = []; let A0 = 0, P0 = [0, 0, 0];
+  for (let j = 0; j < edges.length - 1; j++){ const { A, P } = look((edges[j] + edges[j + 1])/2);
+    if (A <= A0 + .002) continue;
+    const a = (A - A0)/(1 - A0), c = P.map((v, i) => Math.max(0, Math.min(1, (v - P0[i]*(1 - a))/a)));
+    out.push({ w: 2*edges[j], a, c: '#' + c.map(v => Math.round(v*255).toString(16).padStart(2, '0')).join('') });
+    A0 = A; P0 = P; }
+  return out;
+}
+const bandPaths = (d, strokes, extra, n) => softBands(strokes, GLOW_SD*INK_K, n).map(b =>
+  `<path d="${d}" fill="none" stroke="${b.c}" style="stroke-width:${b.w.toFixed(2)}" stroke-opacity="${b.a.toFixed(3)}" ${extra} stroke-linecap="round" stroke-linejoin="round"/>`).join('');
+const glowLine = (d, col, w, op, extra = '') => glowOn() ? bandPaths(d, [[col, w, op]], extra, 4)
+  : `<path d="${d}" fill="none" stroke="${col}" style="stroke-width:${w}" opacity="${op}" ${extra} filter="url(#tsSoft)"/>`;
+const softStrokes = (d, strokes, extra = '') => glowOn() ? bandPaths(d, strokes, extra, 5)
+  : strokes.map(([col, w, op]) => `<path d="${d}" fill="none" stroke="${col}" style="stroke-width:${w.toFixed(2)}" stroke-linecap="round" stroke-linejoin="round" opacity="${op}" ${extra}/>`).join('');
+const softGroup = inner => glowOn() ? `<g pointer-events="none">${inner}</g>` : `<g filter="url(#tsSoft)" pointer-events="none">${inner}</g>`;
+// radial gradients for glowFill, one per colour and size class, kept in <defs id="gdefs"> for the page's whole life
+const GLOW_GRADS = new Map();
+function glowGrad(col, ratio){
+  const key = col + '|' + ratio; let id = GLOW_GRADS.get(key); if (id) return id;
+  id = 'gg' + GLOW_GRADS.size; GLOW_GRADS.set(key, id);
+  // a spot of radius a (= ratio x sd) blurred by sd, drawn on an ellipse of radius a + 2.5 sd: alpha at t of that radius
+  const a = ratio, m = 2.5, T = r => .5*(erf((a - r)/Math.SQRT2) + erf((a + r)/Math.SQRT2)), T0 = T(0);
+  let stops = ''; for (let i = 0; i <= 10; i++){ const t = i/10; stops += `<stop offset="${t.toFixed(2)}" stop-color="${col}" stop-opacity="${(T(t*(a + m))/T0).toFixed(3)}"/>`; }
+  const defs = document.getElementById('gdefs');
+  if (defs) defs.insertAdjacentHTML('beforeend', `<radialGradient id="${id}" cx=".5" cy=".5" r=".5">${stops}</radialGradient>`);
+  return id;
+}
+// el0: optional opening of the element the blurred version draws (e.g. '<circle cx=".." cy=".." r=".."'), d then only
+// gives the spot's box (two corners are enough)
+function glowFill(d, col, op, extra = '', el0 = null){
+  if (!glowOn()) return `${el0 || `<path d="${d}"`} fill="${col}" opacity="${op}" filter="url(#tsSoft)" ${extra}/>`;
+  const v = d.match(/-?\d*\.?\d+(?:e[-+]?\d+)?/gi).map(Number), xs = v.filter((_, i) => !(i % 2)), ys = v.filter((_, i) => i % 2);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys), sd = GLOW_SD*INK_K, m = 2.5*sd;
+  const ax = (x1 - x0)/2, ay = (y1 - y0)/2, ratio = Math.max(.25, Math.round(Math.sqrt(ax*ay)/sd*4)/4);
+  // the blurred spot's peak is lower than op for a small spot: scale the gradient by that peak
+  const peak = erf(ratio/Math.SQRT2);
+  return `<ellipse cx="${f((x0 + x1)/2)}" cy="${f((y0 + y1)/2)}" rx="${(ax + m).toFixed(2)}" ry="${(ay + m).toFixed(2)}" fill="url(#${glowGrad(col, ratio)})" fill-opacity="${(+op*peak).toFixed(3)}" ${extra}/>`;
+}
+
 /* ---------- constant on-screen line weight ----------
    Stroke widths are written in model units, and each figure is zoomed to fill the frame, so a small
    object would get fat lines. INK_K rescales every stroke-width (and the wobble/grain filter) so all
@@ -288,6 +369,42 @@ const clipTo = (pts3, inner) => { const id = 'k' + (++_clipN); return `<clipPath
 const INK_REF_VB = 585;
 let INK_K = 1;
 const inkScale = svg => INK_K === 1 ? svg : svg.replace(/stroke-width="([\d.]+)"/g, (_, w) => `stroke-width="${(+w * INK_K).toFixed(2)}"`);
+/* ?gop=0: fold group opacity into the shapes. Walks the tags of a layer string; a <g opacity> (or <svg>, <a>) passes its
+   opacity down and loses it; a shape (path, circle, ...) under a total opacity below 1 gets it multiplied into its own
+   fill-opacity and stroke-opacity, and its own opacity attribute is folded in the same way. Cast shadow fills are left
+   whole (the page moves those out of translucent groups anyway). Our own markup only: no '>' inside attribute values. */
+const GOP_LEAF = /^(path|circle|ellipse|rect|text|polygon|polyline|line|use|image)$/;
+const mulAttr = (attrs, name, k) => { const re = new RegExp('\\s' + name + '="([^"]*)"'), m = attrs.match(re);
+  return m ? attrs.replace(m[0], ` ${name}="${((parseFloat(m[1]) || 0)*k).toFixed(3)}"`) : attrs + ` ${name}="${k.toFixed(3)}"`; };
+function gopFlat(s){
+  if (s.indexOf('opacity') < 0) return s;
+  const stack = [1];
+  return s.replace(/<(\/?)([a-zA-Z][\w:-]*)([^>]*?)(\/?)>/g, (m, close, tag, attrs, self) => {
+    if (close){ if (stack.length > 1) stack.pop(); return m; }
+    const k = stack[stack.length - 1], om = attrs.match(/\sopacity="([^"]*)"/), own = om ? (isFinite(parseFloat(om[1])) ? parseFloat(om[1]) : 1) : 1;
+    if (tag === 'g' || tag === 'svg' || tag === 'a'){ if (om) attrs = attrs.replace(om[0], ''); if (!self) stack.push(k*own); return `<${tag}${attrs}${self}>`; }
+    const tot = k*own;
+    if (GOP_LEAF.test(tag) && (om || tot < 1) && !/fill="#41538f"/i.test(attrs)){ if (om) attrs = attrs.replace(om[0], '');
+      if (tot < 1) attrs = mulAttr(mulAttr(attrs, 'fill-opacity', tot), 'stroke-opacity', tot); }
+    if (!self) stack.push(k);
+    return `<${tag}${attrs}${self}>`; });
+}
+/* ?dom=attr: write a layer by patching the live nodes. The new string is parsed into a detached <g> (no style, no layout),
+   then walked beside the live content: same tag = attributes and text updated in place, else the node is swapped. */
+const syncAttrs = (x, y) => { for (const a of [...x.attributes]) if (!y.hasAttribute(a.name)) x.removeAttribute(a.name);
+  for (const a of y.attributes) if (x.getAttribute(a.name) !== a.value) x.setAttribute(a.name, a.value); };
+function morphKids(a, b){
+  let x = a.firstChild, y = b.firstChild;
+  while (y){ const ny = y.nextSibling;
+    if (!x){ a.appendChild(y); y = ny; continue; }
+    const nx = x.nextSibling;
+    if (x.nodeType !== y.nodeType || x.nodeName !== y.nodeName) a.replaceChild(y, x);
+    else if (x.nodeType === 1){ syncAttrs(x, y); morphKids(x, y); }
+    else if (x.data !== y.data) x.data = y.data;
+    x = nx; y = ny; }
+  while (x){ const nx = x.nextSibling; a.removeChild(x); x = nx; }
+}
+const morph = (el, s) => { const tmp = document.createElementNS('http://www.w3.org/2000/svg', 'g'); tmp.innerHTML = s; morphKids(el, tmp); };
 
 /* ---------- page shell ---------- */
 const CORE_CSS = `
@@ -355,6 +472,12 @@ const PILLA_CSS = `
   html.inlock #fig, html.inlock .actions{pointer-events:none}
   html.nofx #art{filter:none!important} html.fx #art{filter:url(#hand)!important}
   html.noblur #art [filter]{filter:none!important}
+  html.noclip #art [clip-path], html.noclip svg.lay [clip-path]{clip-path:none!important}
+  svg.lay{position:absolute;overflow:visible;pointer-events:none;will-change:transform;-webkit-user-select:none;user-select:none}
+  svg.lay .art{pointer-events:visiblePainted} html.inlock svg.lay .art{pointer-events:none} html.pilla svg.lay{touch-action:none}
+  html.nolabels svg.lay .tag{display:none} html.noblur svg.lay .art [filter]{filter:none!important}
+  svg.lay .art{filter:url(#hand)} @media (max-width:560px),(pointer:coarse){svg.lay .art{filter:none}}
+  html.nofx svg.lay .art{filter:none!important} html.fx svg.lay .art{filter:url(#hand)!important}
   #fps{position:fixed;right:6px;bottom:6px;z-index:9;font:700 12px ui-monospace,Menlo,monospace;background:rgba(35,30,22,.75);color:#fff;padding:2px 7px;border-radius:6px;pointer-events:none}
   html.pilla body{display:block;padding:0;height:100%;overflow:hidden}
   html.pilla header, html.pilla .controls, html.pilla .made-with, html.pilla .zchip{display:none!important}
@@ -477,13 +600,14 @@ function mountFigure(cfg){
   if (q.get('fx') === '0') html.classList.add('nofx'); else if (q.get('fx') === '1') html.classList.add('fx');
   // ?blur=0: drop every filter inside the drawing (glows, soft steam), to measure what they cost on a slow tablet
   if (q.get('blur') === '0') html.classList.add('noblur');
+  if (!PILLA_OPT.clip) html.classList.add('noclip');
   document.body.innerHTML = `
     <header><h1>Fig. ${cfg.fig} — ${cfg.title}</h1></header>
     <div class="stage">
       ${(cfg.buttons && cfg.buttons.length) || ctlList.length ? `<div class="actions" id="btns"></div>` : ''}
       ${cfg.stats ? '<div class="stats" id="stats"></div>' : ''}
       <div class="toast" id="toast" role="status"></div>
-      <svg id="fig" role="img" aria-label="${cfg.title}"><defs id="fdefs"></defs><g id="art" filter="url(#hand)"></g><g id="hl"></g></svg>
+      <svg id="fig" role="img" aria-label="${cfg.title}"><defs id="fdefs"></defs>${PILLA_OPT.glow === 'grad' ? '<defs id="gdefs"></defs>' : ''}<g id="art" filter="url(#hand)"></g><g id="hl"></g></svg>
     </div>
     <div id="readout"></div>
     ${cfg.idea ? `<p class="idea"><strong>The big idea</strong>${cfg.idea}</p>` : ''}
@@ -526,6 +650,9 @@ function mountFigure(cfg){
   if (q.get('fx') !== '0') bakeNoise(svg);
 
   const art = document.getElementById('art'), readout = document.getElementById('readout'), hl = document.getElementById('hl');
+  // ?split=1: the layers live in stacked <svg class="lay"> panes over #fig (see paint below); #art stays empty then
+  const SPLIT = PILLA_OPT.split, panes = [];
+  const artAll = sel => SPLIT ? [...art.querySelectorAll(sel), ...panes.flatMap(p => [...p.g.querySelectorAll(sel)])] : art.querySelectorAll(sel);
   const ui = { st }; PL.cfg = cfg; PL.ui = ui;
   const lockedP = new Set(), faultsOn = new Set(), repairing = new Map();   // repairing: fault id -> { cancelled } while its repair animation runs
   let hlSpec = null, hlTimer = 0;
@@ -533,7 +660,7 @@ function mountFigure(cfg){
   const drawHl = () => { hl.innerHTML = ''; if (!hlSpec) return;
     const m = svg.getScreenCTM(), k = m ? Math.hypot(m.a, m.b) || 1 : 1, pad = 6 / k;
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-    for (const g of art.querySelectorAll('[data-part]')){ if (g.dataset.part !== hlSpec.part) continue;
+    for (const g of artAll('[data-part]')){ if (g.dataset.part !== hlSpec.part) continue;
       for (const c of g.children){ if (c.dataset && c.dataset.hit) continue; let b; try { b = c.getBBox(); } catch (e) { continue; }
         if (!b || (!b.width && !b.height)) continue; x0 = Math.min(x0, b.x); y0 = Math.min(y0, b.y); x1 = Math.max(x1, b.x + b.width); y1 = Math.max(y1, b.y + b.height); } }
     hl.setAttribute('class', hlSpec.style === 'pulse' ? 'pulse' : '');
@@ -555,16 +682,22 @@ function mountFigure(cfg){
   const nodesToString = n => Array.isArray(n) ? n.map(nodesToString).join('') : n !== null && typeof n === 'object'
     ? `<g ${Object.entries(n.g || {}).map(([k, v]) => `${k}="${v}"`).join(' ')}>${nodesToString(n.kids || [])}</g>` : (n || '');
   const NS_SVG ='http://www.w3.org/2000/svg', flatten = (a, out = []) => { for (const n of a) if (Array.isArray(n)) flatten(n, out); else out.push(n); return out; };
+  // the speed-test switches that rewrite a layer's string (gop=0) or how it is written (dom=attr); none set = as always
+  const XF = !PILLA_OPT.gop, ATTR = PILLA_OPT.dom === 'attr';
+  const finish = raw => XF ? gopFlat(inkScale(raw)) : inkScale(raw);
+  const write = (el, s) => { if (ATTR) morph(el, s); else el.innerHTML = s; };
   const syncNodes = (host, state, nodes, changed) => {
     const list = flatten(Array.isArray(nodes) ? nodes : [nodes]);
     for (let i = 0; i < list.length; i++){
-      const n = list[i], grp = n !== null && typeof n === 'object';
+      const n = list[i], obj = n !== null && typeof n === 'object', grp = obj && !(XF && n.g && n.g.opacity != null);   // gop=0: a translucent group is flattened as one string
       let ent = state[i];
       if (!ent || ent.grp !== grp){
         const el = document.createElementNS(NS_SVG, 'g');
-        if (ent) host.replaceChild(el, ent.el); else host.appendChild(el);
-        ent = state[i] = { grp, el, str: null, key: null, sub: [] }; }
-      if (!grp){ const s = inkScale(n || ''); if (ent.str !== s){ ent.el.innerHTML = s; ent.str = s; changed.push(ent.el); } }
+        if (ent) ent.el.parentNode.replaceChild(el, ent.el); else host.appendChild(el);
+        ent = state[i] = { grp, el, str: null, raw: null, key: null, sub: [] }; }
+      if (!grp){
+        if (XF || ATTR){ const raw = obj ? nodesToString(n) : (n || ''); if (ent.raw !== raw){ ent.raw = raw; const s = finish(raw); ent.str = s; write(ent.el, s); changed.push(ent.el); } }
+        else { const s = inkScale(n || ''); if (ent.str !== s){ ent.el.innerHTML = s; ent.str = s; changed.push(ent.el); } } }
       else {
         const key = JSON.stringify(n.g || {});
         if (ent.key !== key){ for (const a of [...ent.el.attributes]) ent.el.removeAttribute(a.name);
@@ -574,14 +707,53 @@ function mountFigure(cfg){
   const paint = res => {
     const changed = [];
     if (Array.isArray(res)){
-      if (lastWhole !== null){ art.textContent = ''; lastWhole = null; }
+      if (lastWhole !== null){ art.textContent = ''; lastWhole = null; lastRaw = null; }
       syncNodes(art, layerState, res, changed);
+      if (SPLIT) arrange(changed);
     } else {
-      if (layerState.length){ art.textContent = ''; layerState = []; lastWhole = null; }
-      const s = inkScale(res);
-      if (s !== lastWhole){ art.innerHTML = s; lastWhole = s; changed.push(art); }
+      if (layerState.length){ art.textContent = ''; for (const e of layerState) e.el.remove(); layerState = []; lastWhole = null; if (SPLIT) arrange([]); }
+      if (XF || ATTR){ if (res !== lastRaw){ lastRaw = res; const s = finish(res); lastWhole = s; write(art, s); changed.push(art); } }
+      else { const s = inkScale(res);
+        if (s !== lastWhole){ art.innerHTML = s; lastWhole = s; changed.push(art); } }
     }
     ui.changed = changed; };
+  let lastRaw = null;
+  /* ?split=1. Every top-level layer has an age: renders since its string last changed. Consecutive layers that are all
+     "hot" (changed in the last HOT_N renders) or all still share one pane, an <svg class="lay"> stacked over #fig with the
+     same viewBox and size, on its own compositing layer (will-change), so that a frame repaints only the panes whose layers
+     changed. Panes are regrouped only when the hot/still pattern changes; a layer is moved, never re-parsed. #fig stays
+     underneath, empty, holding the filters (url(#...) works across the svgs of one page) and taking the clicks that hit no
+     shape; the panes let clicks through except on their shapes, and the pointer handlers listen on the stage. */
+  const HOT_N = 30; let ages = [], sig = '', hlPane = null;
+  const mkPane = () => { const p = document.createElementNS(NS_SVG, 'svg'); p.setAttribute('class', 'lay'); p.setAttribute('aria-hidden', 'true');
+    p.setAttribute('viewBox', svg.getAttribute('viewBox'));
+    const g = document.createElementNS(NS_SVG, 'g'); g.setAttribute('class', 'art');   // the hand-drawn filter comes from the CSS above, as #art's
+    p.appendChild(g); return { svg: p, g }; };
+  // the panes sit exactly over #fig (same parent, same box, the same zoom transform as the page's zoom sets on #fig)
+  const placePanes = () => { if (!SPLIT) return; const par = svg.parentNode, cs = getComputedStyle(svg);
+    const box = `left:${parseFloat(cs.marginLeft) || 0}px;top:${parseFloat(cs.marginTop) || 0}px;width:${svg.clientWidth}px;height:${svg.clientHeight}px;transform-origin:${cs.transformOrigin};transform:${svg.style.transform || 'none'}`;
+    let after = svg;
+    for (const p of [...panes.map(x => x.svg), hlPane]){ if (!p) continue;
+      if (p.parentNode !== par || p.previousSibling !== after) par.insertBefore(p, after.nextSibling);
+      if (p.style.cssText !== box) p.style.cssText = box; after = p; } };
+  function arrange(changed){
+    const n = layerState.length;
+    for (let i = 0; i < n; i++){ const el = layerState[i].el, ch = changed.some(c => c === el || el.contains(c)); ages[i] = ch || ages[i] == null ? 0 : ages[i] + 1; }
+    ages.length = n;
+    const hot = ages.map(a => a < HOT_N), key = hot.map(h => h ? 1 : 0).join('');
+    if (panes.length && panes[0].svg.parentNode !== svg.parentNode) placePanes();   // the page's zoom wraps #fig once after mounting
+    if (key === sig && !layerState.some(e => e.el.parentNode === art)) return;
+    sig = key; let p = -1, j = 0;
+    for (let i = 0; i < n; i++){
+      if (i === 0 || hot[i] !== hot[i - 1]){ p++; j = 0; if (!panes[p]) panes.push(mkPane()); }
+      const g = panes[p].g, el = layerState[i].el; if (g.childNodes[j] !== el) g.insertBefore(el, g.childNodes[j] || null); j++; }
+    while (panes.length > p + 1) panes.pop().svg.remove();
+    if (!hlPane){ hlPane = document.createElementNS(NS_SVG, 'svg'); hlPane.setAttribute('class', 'lay'); hlPane.setAttribute('aria-hidden', 'true');
+      hlPane.setAttribute('viewBox', svg.getAttribute('viewBox')); hlPane.appendChild(hl); }
+    placePanes(); }
+  if (SPLIT){ if (typeof ResizeObserver !== 'undefined') new ResizeObserver(placePanes).observe(svg);
+    new MutationObserver(placePanes).observe(svg, { attributes: true, attributeFilter: ['style'] });
+    addEventListener('resize', placePanes); }
   ui.changed = [];
   let lastAccent = '', lastReadout = null;
   ui.render = () => { _clipN = 0; const ac = PALS[st.pal].l; if (ac !== lastAccent){ lastAccent = ac; document.documentElement.style.setProperty('--accent', ac); }
@@ -656,7 +828,10 @@ function mountFigure(cfg){
     let idx = stopIdx(tr);
     if (!cancelled){ const [X, Y] = clientToSvg(T.cx, T.cy), pts = tr.stops.map(p => P(...p)), ds = pts.map(p => Math.hypot(p[0] - X, p[1] - Y)); idx = ds.indexOf(Math.min(...ds)); }
     glide(T, from, idx, 280, 'child'); }
-  svg.addEventListener('pointerdown', e => { if (e.button || INPUT_LOCK) return;
+  // ?split=1: the shapes live in the panes over #fig, so the handlers listen on the stage (only presses on the figure
+  // count); pointer capture still goes to #fig, so the page's pinch zoom (on #fig's wrapper) sees the moves as before
+  const evEl = SPLIT ? document.querySelector('.stage') : svg, onFig = t => !SPLIT || !!(t && t.closest && t.closest('#fig, svg.lay'));
+  evEl.addEventListener('pointerdown', e => { if (e.button || INPUT_LOCK || !onFig(e.target)) return;
     ptrs.add(e.pointerId); if (ptrs.size > 1){ tapC = null; return; }
     const g = e.target.closest('[data-part]');
     tapC = { id: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now(), part: g ? g.dataset.part : null, moved: false };
@@ -667,7 +842,7 @@ function mountFigure(cfg){
     // orbit: drag anywhere that is not a clickable part (the machine turns the way the finger moves); arrow keys nudge; double-click eases back to the front view
     if (CAM_LOCK) return;
     camAnim++; orb = { x:e.clientX, y:e.clientY, yaw:YAW, pitch:PITCH, moved:false }; svg.classList.add("drag"); try { svg.setPointerCapture(e.pointerId); } catch (_) {} });
-  svg.addEventListener('pointermove', e => {
+  evEl.addEventListener('pointermove', e => {
     if (tapC && tapC.id === e.pointerId && dist(e, tapC) > 10) tapC.moved = true;
     if (dgT && dgT.pid === e.pointerId){ dgT.cx = e.clientX; dgT.cy = e.clientY; ui.invalidate(); return; }
     if (!orb) return; const k = 300 / svg.getBoundingClientRect().width;
@@ -678,8 +853,8 @@ function mountFigure(cfg){
       if (!cancelled && c.part && !c.moved && dist(e, c) <= 10 && performance.now() - c.t <= 600) PILLA_EV.emit('tap', { part: c.part }); }
     if (dgT && dgT.pid === e.pointerId) endDrag(cancelled);
     if (orb){ const o = orb; orb = null; svg.classList.remove('drag'); if (o.moved && !cancelled) PILLA_EV.emit('viewChanged', { view: ui.view() }); ui.invalidate(); } };
-  svg.addEventListener('pointerup', e => release(e, false)); svg.addEventListener('pointercancel', e => release(e, true));
-  svg.addEventListener('dblclick', e => { if (!INPUT_LOCK && !CAM_LOCK && !e.target.closest('[data-act],[data-drag]')) camTo(HOME_Y, HOME_P); });
+  evEl.addEventListener('pointerup', e => release(e, false)); evEl.addEventListener('pointercancel', e => release(e, true));
+  evEl.addEventListener('dblclick', e => { if (!INPUT_LOCK && !CAM_LOCK && onFig(e.target) && !e.target.closest('[data-act],[data-drag]')) camTo(HOME_Y, HOME_P); });
   addEventListener('resize', () => ui.invalidate());
   addEventListener('keydown', e => { const k = { ArrowLeft:[-15,0], ArrowRight:[15,0], ArrowUp:[0,8], ArrowDown:[0,-8] }[e.key];
     if (!k || window.GAME_KEYS || /input|textarea/i.test(e.target.tagName)) return; e.preventDefault(); camTo(YAW + k[0], PITCH + k[1], 260); });   // a game figure keeps the arrows for play
@@ -775,7 +950,7 @@ function mountFigure(cfg){
   ui.readings = () => cfg.readings ? cfg.readings(st) : {};
   // parts the figure can show: the ids in the drawing now, plus those only drawn with see-through on (one off-screen
   // render of the scene with xr = 1, then everything restored)
-  ui.partIds = () => { const ids = new Set([...art.querySelectorAll('[data-part]')].map(g => g.dataset.part)), xr0 = st.xr, ln0 = window.__ln;
+  ui.partIds = () => { const ids = new Set([...artAll('[data-part]')].map(g => g.dataset.part)), xr0 = st.xr, ln0 = window.__ln;
     try { st.xr = 1; window.__ln = Object.assign({}, ln0); const r = cfg.scene(st, PALS[st.pal]), s = nodesToString(r); for (const m of s.matchAll(/data-part="([^"]+)"/g)) ids.add(m[1]); }
     catch (e) {} finally { st.xr = xr0; window.__ln = ln0; _clipN = 0; }
     return [...ids]; };
@@ -793,7 +968,7 @@ function mountFigure(cfg){
     const tick = now => { n++; if (now - t0 >= 1000){ el.textContent = Math.round(n * 1000 / (now - t0)) + ' fps'; n = 0; t0 = now; } requestAnimationFrame(tick); }; requestAnimationFrame(tick); }
   window.__ui = ui;
   setLight(st.az); ui.render();
-  if (art.querySelector('.tag')) lblctl.hidden = false;
+  if (artAll('.tag').length) lblctl.hidden = false;
   PILLA_EV.emit('mounted', { ui, cfg });
   return ui;
 }
@@ -1160,8 +1335,7 @@ function wisp(base, ph, n, step, sway, dir, alpha, w0 = 3.2){
     const sx = Math.sin(t/620 + ph + i*.55)*(.5 + i*.32)*sway, sy = Math.cos(t/760 + ph + i*.42)*(.4 + i*.26)*sway;
     pts.push([base[0] + sx + dir[0]*i, base[1] + sy + dir[1]*i, base[2] + i*step]); }
   const seg = (p0, p1, w, o) => { const d = pd(pts.slice(p0, p1 + 1), false);
-    return `<path d="${d}" fill="none" stroke="#7f8f99" ${mw(w + 1.8)} stroke-linecap="round" stroke-linejoin="round" opacity="${(.5*o*alpha).toFixed(3)}"/>`
-      + `<path d="${d}" fill="none" stroke="#ffffff" ${mw(w)} stroke-linecap="round" stroke-linejoin="round" opacity="${(o*alpha).toFixed(3)}"/>`; };
+    return softStrokes(d, [['#7f8f99', w + 1.8, (.5*o*alpha).toFixed(3)], ['#ffffff', w, (o*alpha).toFixed(3)]]); };
   const h = Math.floor(n/2);
   return { pts, svg: seg(0, h, w0, .8) + seg(h - 1, n, w0*.7, .5) };
 }
@@ -1176,7 +1350,7 @@ function steamOutside(st){
   [125, 200, 275].forEach((deg, i) => { const an = deg*DEG, r = 26.4, b = [KX + r*Math.cos(an), KY + r*Math.sin(an), ZT + 1.6];
     const ws = wisp(b, 1.3 + i*1.7, 6, 3.8, .9, [.2*Math.cos(an), .2*Math.sin(an)], a*.8, 3.2).svg;
     (facing(nAt(an)) ? front : back).push(ws); });
-  const g = s => s ? `<g filter="url(#tsSoft)" pointer-events="none">${s}</g>` : '';
+  const g = s => s ? softGroup(s) : '';
   return { front: g(front.join('')), back: g(back.join('')) };
 }
 
@@ -1217,7 +1391,7 @@ function bodySvg(st, m){
       w += dots; }
     for (const [lv, lab] of [[1, 'MAX'], [.2, 'MIN']]){ const z = zWater(lv);
       w += ink(pd([surf(WIN.a0 - 3*DEG, z, .3), surf(WIN.a1, z, .3)], false), .9) + txA(WIN.a0 - 11*DEG, z - 1.2, lab, 3.2, INK, 800); }
-    s += part('vatten', w);
+    if (WIN_SPLIT) WIN_LAYER = part('vatten', w); else s += part('vatten', w);
   }
   // model plate on the back
   const pa = 220*DEG;
@@ -1258,7 +1432,7 @@ function rockerSvg(st){
   s += box(rx - 5, y, ZB + 4.5, rx, y + dA, ZB + 10.5, KNOBM, toneI, .8) + box(rx, y, ZB + 4.5, rx + 5, y + dB, ZB + 10.5, KNOBM, toneI, .8);
   s += txY(rx - 2.5, y + dA + .05, ZB + 6.8, 'O', 2.6, INK, 800) + txY(rx + 2.5, y + dB + .05, ZB + 6.8, 'I', 2.6, INK, 800);
   let lamp = shape(on(PY(y + .1), rrUV(rx - 2.5, ZB + 12.6, rx + 2.5, ZB + 14.8, 1.1, 3)), lit ? '#ff8a2e' : '#7a4a2a', .7);
-  if (lit) lamp += fill(pd(on(PY(y + .2), rrUV(rx - 4, ZB + 11.6, rx + 4, ZB + 15.8, 2, 3))), '#ffb36b', 'opacity=".55" filter="url(#tsSoft)" pointer-events="none"');
+  if (lit) lamp += glowFill(pd(on(PY(y + .2), rrUV(rx - 4, ZB + 11.6, rx + 4, ZB + 15.8, 2, 3))), '#ffb36b', '.55', 'pointer-events="none"');
   return act('switch', part('vippbrytare', s)) + part('lampa', lamp);
 }
 const housingSvg = (st, m) => box(HOUS.x0, HOUS.y0, HOUS.z0, HOUS.x1, HOUS.y1, HOUS.z1, m, tone, 1.3) + rockerSvg(st);
@@ -1281,8 +1455,14 @@ function shellSvg(st, m, k = 0){
 }
 // kettleSvg returns an ARRAY of strings (layers, back to front): the engine redraws only those that changed since the last
 // frame (the shell and most working parts are the same every frame; the water, bubbles and steam are not)
+// ?split=1 speed test: in see-through the window (its water wobbles and bubbles every frame) is taken out of the ghosted shell
+// into a layer of its own just after it, so the big shell layer stays still and its pane is not repainted. (It then draws
+// over the shell's outline instead of under it, at the same ghost opacity; a very small change in look.)
+let WIN_SPLIT = false, WIN_LAYER = '';
 function kettleSvg(st, m, k){
+  WIN_SPLIT = PILLA_OPT.split && k > 0; WIN_LAYER = '';
   const so = steamOutside(st), sh = shellSvg(st, m, k);
+  WIN_SPLIT = false;
   if (!(k > 0)) return [so.back, sh.shell, so.front];
   // far inner walls faintly, the shell as a ghost, then the working parts over it and the switch redrawn on top
   let far = '';
@@ -1295,7 +1475,7 @@ function kettleSvg(st, m, k){
   let hits = '';
   if (k > .6) hits = hitLine('element', Array.from({length:17}, (_, i) => eP(200 + i*20)), 2.4) + hitLine('angror', TUBE, 2.6)
     + hitDot('bimetall', [CX, KY, DZ + .5], DR + 1.5) + hitDot('kontakt', [KX, KY, ZB + 2.2], 6);
-  return [so.back, ghost, ...(k >= 1 ? mech : [`<g opacity="${f(k)}">${mech.join('')}</g>`]), sh.over + hits, so.front];
+  return [so.back, ghost, ...(WIN_LAYER ? [`<g opacity="${f(1 - .8*k)}">${WIN_LAYER}</g>`] : []), ...(k >= 1 ? mech : [`<g opacity="${f(k)}">${mech.join('')}</g>`]), sh.over + hits, so.front];
 }
 
 /* ---------- see-through: how a real cordless kettle works ----------
@@ -1406,7 +1586,7 @@ function kettleMech(st, k){
     if (er.broken && a === EBREAK) sv = elBreakSvg(false, er.dz);
     else {
       sv = rod(p, q, 1.3, EM, toneI, .5, 1.3, 10);
-      if (eg > .05) sv += `<path d="${pd([p, q], false)}" fill="none" stroke="#ff8a3d" ${mw(3.4)} opacity="${f(.55*eg)}" stroke-linecap="round" filter="url(#tsSoft)" pointer-events="none"/>`;
+      if (eg > .05) sv += glowLine(pd([p, q], false), '#ff8a3d', 3.4, f(.55*eg), 'stroke-linecap="round" pointer-events="none"');
     }
     if (er.op < 1) sv = `<g opacity="${f(er.op)}">${sv}</g>`;
     put(kBoxOf([p, q]).map((c, i) => [c[0], c[1], i ? EZ + 1.3 + er.dz : EZ - 1.3 + er.dz]), part('element', sv)); }
@@ -1463,7 +1643,7 @@ function kettleMech(st, k){
     if (st.steam > .02 && st.water > .02){ const zW = zWater(st.water), top = ZT - 2, n = Math.max(2, Math.floor((top - zW)/3.2));
       [[8, 6], [-6, 10], [4, -10], [-14, -2]].forEach(([dx, dy], i) => { sm += wisp([KX + dx, KY + dy, zW + .5], i*1.9, n, (top - zW - .5)/n, .8, [-.35, 0], st.steam, 3.2).svg; });
       if (st.kalk && !(repT(st, 'kalk') > 2)) sm += wisp([KX - 16, KY + 1, ZT - 12], 4.2, 3, 2.2, 1.6, [.9, 0], st.steam*.8, 2).svg;
-      sm = `<g filter="url(#tsSoft)" pointer-events="none">${sm}</g>`; }
+      sm = softGroup(sm); }
     const svg = facing([-1,0,0]) ? w + tb + sm : tb + w + sm;
     put([[KX - 31.2, KY - 31.2, ZF], [KX + 31.2, KY + 31.2, ZT]], svg); }
   // the tube's lower part: out through the back wall into the controller, ending over the disc
@@ -1477,7 +1657,7 @@ function kettleMech(st, k){
   { const pin = rod([CX, KY, DZ - 1], [CX, KY, pinZ], .55, METAL, toneI, .5), seat = cyl(CX, KY, DZ - 1, DZ - .1, DR + .6, TGM, toneI, .7, 22);
     const D0 = kRing(DZ, DR, 22, CX, KY), D1 = kRing(DZ + hdome, DR*.45, 22, CX, KY), DM = { l:'#f6d6b0', m:'#dca36a', d:'#a56c38' };
     let sv = loft(D0, D1, n => toneI(n, DM), hdome < 0) + fill(pd(D1), DM.l) + ink(pd(D1), .5) + ink(pd(D0), .9) + hullInk([...D0, ...D1], 1);
-    if (d > .05) sv += fill(pd(kRing(DZ + .5, DR + 1, 22, CX, KY)), '#ffd08a', `opacity="${f(.5*d)}" filter="url(#tsSoft)" pointer-events="none"`);
+    if (d > .05) sv += glowFill(pd(kRing(DZ + .5, DR + 1, 22, CX, KY)), '#ffd08a', f(.5*d), 'pointer-events="none"');
     put([[CX - DR - .6, KY - DR - .6, pinZ], [CX + DR + .6, KY + DR + .6, DZ + 1.3]], part('bimetall', pin + seat + sv)); }
   put([[AX - .5, KY - .7, pinZ - .7], [CX + .7, KY + 3.8, AZ + .7]], part('vippbrytare', rod([CX, KY, pinZ], [AX, KY + 3, AZ], .6, TGM, toneI, .6)));
   put([[AX - .8, KY - 5.5, AZ - .8], [AX + .8, HOUS.y1, AZ + .8]], part('vippbrytare', rod([AX, KY - 5.5, AZ], [AX, HOUS.y1, AZ], .8, METAL, toneI, .6)));
@@ -1529,7 +1709,7 @@ function rbStrip(st){
   if (vis([0,0,1])){
     const lx = (S1.x0 + S1.x1)/2, ly = S1.y1 - 5;
     s += shape(on(PZ(zt + .05), ellUV(lx, ly, 2.4, 2.4, 14)), '#43c25c', .9);
-    s += fill(pd(on(PZ(zt + .1), ellUV(lx, ly, 4.2, 4.2, 14))), '#8af0ae', 'opacity=".45" filter="url(#tsSoft)"');
+    s += glowFill(pd(on(PZ(zt + .1), ellUV(lx, ly, 4.2, 4.2, 14))), '#8af0ae', '.45');
   }
   return s;
 }

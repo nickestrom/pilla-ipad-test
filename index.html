@@ -18,9 +18,17 @@
   <a href="tools/harness.html#figure=gungbrada&amp;lock=1&amp;fps=1&amp;fx=1"><b>Gungbrada, hand-drawn effect on</b><span>Same, with the wobbly ink filter forced on, to compare the frame rate.</span></a>
   <a href="tools/harness.html#figure=gungbrada"><b>Gungbrada, camera free</b><span>Drag empty space to turn the figure; drag a load to move it.</span></a>
   <a href="tools/harness.html#figure=vattenkokare&amp;fps=1"><b>Vattenkokare</b><span>Press Starta. In the panel: highlight a part, apply a fault, repair it, turn on Titta inuti.</span></a>
-  <a href="tools/harness.html#figure=vattenkokare&amp;xr=1&amp;boil=1&amp;fps=1"><b>Speed A: kettle inside, boiling</b><span>Opens in see-through and already boiling. Note the frame rate after a few seconds.</span></a>
-  <a href="tools/harness.html#figure=vattenkokare&amp;xr=1&amp;boil=1&amp;fps=1&amp;blur=0"><b>Speed B: same, without glows</b><span>Same as A, with the soft glows and steam blur switched off. Note the frame rate.</span></a>
-  <a href="tools/harness.html#figure=brodrost&amp;xr=1&amp;fps=1"><b>Brodrost, inside</b><span>Press Tryck ner and watch the toast. Note the frame rate while it heats.</span></a>
-  <a href="tools/harness.html#figure=brodrost&amp;xr=1&amp;fps=1&amp;blur=0"><b>Brodrost, inside, without glows</b><span>Same, glows off. Note the frame rate.</span></a>
+</div>
+<h1 style="margin-top:34px">Speed test: which drawing method is fastest</h1>
+<p>Eight ways to draw the same two moving scenes. Open each, do what it says, and write down the frame rate shown in the bottom right corner (the lowest and highest number you see while it moves). Then go back and open the next one. The pictures should look the same in all of them; note it if one looks wrong.</p>
+<div class="grid">
+  <a href="tools/harness.html#figure=vattenkokare&amp;xr=1&amp;boil=1&amp;fps=1"><b>1. Kettle, as today</b><span>Opens see-through and already boiling. Wait 3 seconds, then note the frame rate for the next 5 seconds while the steam and bubbles move.</span></a>
+  <a href="tools/harness.html#figure=vattenkokare&amp;xr=1&amp;boil=1&amp;fps=1&amp;split=1"><b>2. Kettle, layers split</b><span>Same as 1, with the still parts drawn on separate sheets. Wait 3 seconds, then note the frame rate for 5 seconds.</span></a>
+  <a href="tools/harness.html#figure=vattenkokare&amp;xr=1&amp;boil=1&amp;fps=1&amp;split=1&amp;glow=grad"><b>3. Kettle, layers split + new glows</b><span>Same as 2, with the steam and glows drawn without blur filters. Wait 3 seconds, then note the frame rate for 5 seconds.</span></a>
+  <a href="tools/harness.html#figure=vattenkokare&amp;xr=1&amp;boil=1&amp;fps=1&amp;glow=grad"><b>4. Kettle, new glows only</b><span>Same as 1, with the steam and glows drawn without blur filters. Wait 3 seconds, then note the frame rate for 5 seconds.</span></a>
+  <a href="tools/harness.html#figure=brodrost&amp;xr=1&amp;fps=1"><b>5. Toaster, as today</b><span>Opens see-through. Press Tryck ner, then note the frame rate while the wires glow and the bread browns (about 7 seconds).</span></a>
+  <a href="tools/harness.html#figure=brodrost&amp;xr=1&amp;fps=1&amp;glow=grad"><b>6. Toaster, new glows only</b><span>Same as 5, with the glowing wires drawn without blur filters. Press Tryck ner and note the frame rate while it heats.</span></a>
+  <a href="tools/harness.html#figure=brodrost&amp;xr=1&amp;fps=1&amp;split=1&amp;glow=grad"><b>7. Toaster, layers split + new glows</b><span>Same as 6, with the still parts on separate sheets. Press Tryck ner and note the frame rate while it heats.</span></a>
+  <a href="tools/harness.html#figure=vattenkokare&amp;xr=1&amp;boil=1&amp;fps=1&amp;split=1&amp;glow=grad&amp;gop=0&amp;clip=0&amp;dom=attr"><b>8. Kettle, everything on</b><span>Same as 3, plus three more speed changes (no see-through groups, no clipping, smarter redraw). Small drawing differences are expected. Wait 3 seconds, then note the frame rate for 5 seconds.</span></a>
 </div>
 </body></html>
