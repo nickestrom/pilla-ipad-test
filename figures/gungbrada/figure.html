@@ -40,7 +40,7 @@ const SHADOW = '#41538f';
 const PILLA_OPT = (() => { const q = new URLSearchParams(location.search);
   return { split: q.get('split') !== '0', glow: q.get('glow') === 'blur' ? 'blur' : 'grad', gop: q.get('gop') !== '0',
     clip: q.get('clip') !== '0', dom: q.get('dom') === 'attr' ? 'attr' : 'html', panes: q.get('panes') === 'old' ? 'old' : 'lazy', merge: q.get('merge') != null ? +q.get('merge') : 6000,
-    settle: q.get('settle') !== '0' }; })();
+    settle: q.get('settle') === '1' }; })();
 
 /* ---------- projection (x = depth toward viewer-right, y = toward viewer-left, z = up) ---------- */
 const C = Math.cos(Math.PI/6), S = Math.sin(Math.PI/6);
@@ -751,12 +751,13 @@ function mountFigure(cfg){
       if (p.style.cssText !== box) p.style.cssText = box; after = p; } };
   /* Pane policy (?panes=old restores the plain one: regroup on every hot/still change, one pane per run).
      - Lazy demotion: a still layer that turns hot is regrouped at once (a big still pane would repaint every frame), but
-       a hot layer that goes still stays where it is until a promotion forces a regroup anyway or the whole scene has been
-       quiet for HOT_N renders. Fewer regroups = fewer layers moved and repainted while something winds down.
+       a hot layer that goes still stays where it is until a promotion forces a regroup anyway. Fewer regroups = fewer
+       layers moved and repainted while something winds down.
      - Fewer panes: a still run whose layers' strings total less than STILL_MERGE_CHARS is drawn in the hot pane next to it;
        repainting a little still drawing is cheaper on a tablet than one more full-size composited layer.
-     - ?settle=0 (test switch): when the whole scene goes quiet the panes are left as they are instead of being regrouped
-       into fewer; that last regroup moves and repaints every layer in one frame, a visible hitch on the iPad. */
+     - No regroup when the whole scene goes quiet: the panes are left as they are. Regrouping them into fewer moved and
+       repainted every layer in one frame (iPad Air 2: 28 -> 20 fps at the kettle's switch-off; without it 38-60 in every
+       phase). ?settle=1 (test switch) brings that regroup back. */
   const STILL_MERGE_CHARS = PILLA_OPT.merge, OLD_PANES = PILLA_OPT.panes === 'old';
   const layLen = e => e.str != null ? e.str.length : e.el.innerHTML.length;
   function arrange(changed){
