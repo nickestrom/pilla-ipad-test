@@ -29,4 +29,14 @@
   <a href="tools/harness.html#figure=gungbrada&amp;lock=1&amp;fps=1"><b>5. Seesaw, new default</b><span>Drag the red block back and forth between holes for 5 seconds and note the frame rate while the board tips.</span></a>
   <a href="tools/harness.html#figure=gungbrada&amp;lock=1&amp;fps=1&amp;split=0&amp;glow=blur"><b>6. Seesaw, old method</b><span>Same as 5, drawn the old way.</span></a>
 </div>
+<h1 style="margin-top:34px">Kettle diagnosis: what makes it slow</h1>
+<p>Each link opens the kettle see-through and keeps it boiling (it never switches itself off). Do nothing: wait 3 seconds, then note the lowest and highest frame rate over the next 5 seconds. Each one leaves out one thing, so the difference shows what costs the most.</p>
+<div class="grid">
+  <a href="tools/harness.html#figure=vattenkokare&amp;xr=1&amp;boil=1&amp;fps=1&amp;hold=1"><b>A. Kettle boiling, everything on</b><span>The full picture: water moving, bubbles, steam.</span></a>
+  <a href="tools/harness.html#figure=vattenkokare&amp;xr=1&amp;boil=1&amp;fps=1&amp;freeze=1"><b>B. Kettle, frozen picture</b><span>Same, but nothing moves on screen. It still does all the drawing work in code each frame, so this shows the cost of the code alone.</span></a>
+  <a href="tools/harness.html#figure=vattenkokare&amp;xr=1&amp;boil=1&amp;fps=1&amp;hold=1&amp;nosteam=1"><b>C. Kettle, no steam</b><span>Like A without the steam wisps.</span></a>
+  <a href="tools/harness.html#figure=vattenkokare&amp;xr=1&amp;boil=1&amp;fps=1&amp;hold=1&amp;nobub=1"><b>D. Kettle, no bubbles</b><span>Like A without the bubbles.</span></a>
+  <a href="tools/harness.html#figure=vattenkokare&amp;xr=1&amp;boil=1&amp;fps=1&amp;hold=1&amp;nosteam=1&amp;nobub=1"><b>E. Kettle, no steam, no bubbles</b><span>Like A with only the water surface moving.</span></a>
+  <a href="tools/harness.html#figure=vattenkokare&amp;boil=1&amp;fps=1&amp;hold=1"><b>F. Kettle boiling, closed</b><span>Not see-through: the closed kettle with steam from the spout.</span></a>
+</div>
 </body></html>

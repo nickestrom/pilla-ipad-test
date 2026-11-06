@@ -1355,9 +1355,21 @@ const bez = (a, c, b, n) => Array.from({length:n+1}, (_, i) => { const t = i/n; 
 const hitLine = (id, pts, r) => part(id, `<path d="${pd(pts, false)}" fill="none" stroke="transparent" style="stroke-width:${(2*r*CAM_K).toFixed(2)}" stroke-linecap="round" stroke-linejoin="round" pointer-events="stroke"/>`);
 const hitDot = (id, p, r) => { const [X, Y] = P(...p); return part(id, `<circle cx="${f(X)}" cy="${f(Y)}" r="${(r*CAM_K).toFixed(2)}" fill="transparent" pointer-events="all"/>`); };
 
+/* ---------- iPad speed diagnosis (test only; none set = as always) ----------
+   ?freeze=1  the drawing clock stands still: the loop still renders every frame, but every layer string is the same as the
+              last, so the frame costs only the JavaScript that builds the scene (no DOM write, no repaint)
+   ?nosteam=1 no steam wisps (outside and inside)      ?nobub=1 no bubbles (water, window, tube puffs)
+   ?hold=1    the simulation stands still (with boil=1: it boils on and never switches itself off) while the drawing clock
+              runs, so a measurement sees the same moving scene for as long as it lasts; freeze=1 implies it */
+const DIAG = new URLSearchParams(location.search), DIAG_FREEZE = DIAG.get('freeze') === '1',
+  DIAG_HOLD = DIAG_FREEZE || DIAG.get('hold') === '1',
+  DIAG_NOSTEAM = DIAG.get('nosteam') === '1', DIAG_NOBUB = DIAG.get('nobub') === '1', DIAG_T0 = performance.now();
+const drawNow = () => DIAG_FREEZE ? DIAG_T0 : performance.now();
+
 /* ---------- steam: soft white wisps rising and drifting (the toaster's smoke technique, pale) ---------- */
 function wisp(base, ph, n, step, sway, dir, alpha, w0 = 3.2){
-  const t = performance.now(), pts = [];
+  if (DIAG_NOSTEAM) return { pts: [], svg: '' };
+  const t = drawNow(), pts = [];
   for (let i = 0; i <= n; i++){
     const sx = Math.sin(t/620 + ph + i*.55)*(.5 + i*.32)*sway, sy = Math.cos(t/760 + ph + i*.42)*(.4 + i*.26)*sway;
     pts.push([base[0] + sx + dir[0]*i, base[1] + sy + dir[1]*i, base[2] + i*step]); }
@@ -1409,10 +1421,10 @@ function bodySvg(st, m){
   // the water window: dark glass, the water up to its level, MIN / MAX ticks
   const wa = (WIN.a0 + WIN.a1)/2;
   if (facing(nAt(wa))){
-    const zl = Math.min(WIN.z1, zWater(st.water) + (st.steam > .1 ? Math.sin(performance.now()/90)*.6*st.steam : 0));
+    const zl = Math.min(WIN.z1, zWater(st.water) + (st.steam > .1 ? Math.sin(drawNow()/90)*.6*st.steam : 0));
     let w = shape(patch(WIN.a0, WIN.a1, WIN.z0, WIN.z1, .25), '#56666d', 1.3);
     if (zl > WIN.z0 + .3) w += fill(pd(patch(WIN.a0 + .4*DEG, WIN.a1 - .4*DEG, WIN.z0 + .3, zl, .3)), '#7cc4e6') + ink(pd([surf(WIN.a0, zl, .32), surf(wa, zl, .32), surf(WIN.a1, zl, .32)], false), .6);
-    if (st.temp > .6 && zl > WIN.z0 + 3){ const b = clamp01((st.temp - .6)/.4), t = performance.now(); let dots = '';
+    if (st.temp > .6 && zl > WIN.z0 + 3 && !DIAG_NOBUB){ const b = clamp01((st.temp - .6)/.4), t = drawNow(); let dots = '';
       for (let i = 0; i < 6; i++){ const u = (t/(1900 - 700*b) + i*.19) % 1, z = WIN.z0 + 1 + u*(zl - WIN.z0 - 2), [X, Y] = P(...surf(WIN.a0 + (1 + (i*3.7) % 14)*DEG, z, .4));
         dots += `<circle cx="${f(X)}" cy="${f(Y)}" r="${(.5*CAM_K*(.6 + .6*b)).toFixed(2)}" fill="#ffffff" opacity=".8"/>`; }
       w += dots; }
@@ -1553,8 +1565,8 @@ function along(pts, u){
 }
 // steam travelling down a healthy tube: white puffs from the inlet toward the disc (the front reaches the disc at STEAM_MS)
 function tubeSteam(st, upper){
-  if (st.kalk || st.steam < .05) return '';
-  const boiling = isBoiling(st), front = boiling ? Math.min(1, st.boilMs / STEAM_MS) : 1, a = boiling ? 1 : st.steam, t = performance.now();
+  if (st.kalk || st.steam < .05 || DIAG_NOBUB) return '';
+  const boiling = isBoiling(st), front = boiling ? Math.min(1, st.boilMs / STEAM_MS) : 1, a = boiling ? 1 : st.steam, t = drawNow();
   let s = '';
   for (let i = 0; i < 8; i++){ const u = ((t/900 + i/8) % 1) * front, p = along(TUBE, u);
     if ((p[2] >= TUBE[TUBE_SPLIT][2]) !== upper) continue;
@@ -1603,7 +1615,7 @@ function faultTop(st){
 }
 function kettleMech(st, k){
   const parts = [], put = (b, svg) => parts.push({ box: b, svg });
-  const powered = st.on && !st.loose && !st.elBroken && st.water > .05, boiling = isBoiling(st), t = performance.now();
+  const powered = st.on && !st.loose && !st.elBroken && st.water > .05, boiling = isBoiling(st), t = drawNow();
   const live = powered ? '#ff6a2a' : !st.loose ? '#b5482d' : '#8a3a24', liveSw = powered ? '#ff6a2a' : '#8a3a24', neu = '#3d6fb8';
   // ---- under the floor: connector socket with the pin in it, element, boil-dry disc, wiring
   put([[KX - 6, KY - 6, ZB - .1], [KX + 6, KY + 6, ZB + 5.4]], part('kontakt', kontaktSvg(st)));
@@ -1657,7 +1669,7 @@ function kettleMech(st, k){
       w += `<g opacity=".26">${loft(WA, WB, n2 => toneI(n2, WATERM), true)}</g>`;
       // bubbles: they form on the hot floor and rise, more and bigger toward the boil
       const b = clamp01((st.temp - .6)/.4);
-      if (b > 0){ let bs = ''; const cnt = Math.round(6 + 20*b);
+      if (b > 0 && !DIAG_NOBUB){ let bs = ''; const cnt = Math.round(6 + 20*b);
         for (let i = 0; i < cnt; i++){ const an = i*2.39996, rr = 4 + (i*7.7) % 22, u = (t/(2200 - 900*b) + i*.137) % 1, z = ZF + .6 + u*(zW - ZF - .8);
           const [X, Y] = P(KX + rr*Math.cos(an), KY + rr*Math.sin(an), z), sz = (.35 + .7*u)*(.6 + .9*b);
           bs += `<circle cx="${f(X)}" cy="${f(Y)}" r="${(sz*CAM_K).toFixed(2)}" fill="#ffffff" fill-opacity=".6" stroke="#3c7ea6" stroke-width=".4"/>`; }
@@ -1866,7 +1878,7 @@ function runLoop(){
   const gen = loopGen; let last = performance.now();
   ui.animate(() => { if (gen !== loopGen) return false;
     const st = ui.st, now = performance.now(), dt = Math.min(100, now - last); last = now;
-    stepSim(st, dt * SIM_SPEED);
+    stepSim(st, DIAG_HOLD ? 0 : dt * SIM_SPEED);
     const pw = powerOf(st);
     if (pw !== lastPower){ lastPower = pw; PILLA_EV.emit('stateChanged', { key: 'power', value: pw }); }
     const busy = heats(st) || st.temp > 0 || st.glow > 0 || st.steam > 0 || st.disc > 0 || (st.on && !st.loose && st.elBroken && !st.warned);   // bubbles and steam keep moving
