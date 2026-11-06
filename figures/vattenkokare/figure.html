@@ -708,7 +708,8 @@ function mountFigure(cfg){
         ent = state[i] = { grp, el, str: null, raw: null, key: null, sub: [] }; }
       if (!grp){
         if (XF || ATTR){ const raw = obj ? nodesToString(n) : (n || ''); if (ent.raw !== raw){ ent.raw = raw; const s = finish(raw); ent.str = s; write(ent.el, s); changed.push(ent.el); } }
-        else { const s = inkScale(n || ''); if (ent.str !== s){ ent.el.innerHTML = s; ent.str = s; changed.push(ent.el); } } }
+        else { const raw = n || '';   // compare the raw string first: inkScale (a regex over the whole layer) only runs for a layer that changed (or when the ink scale did)
+          if (ent.raw !== raw || ent.ink !== INK_K){ ent.raw = raw; ent.ink = INK_K; const s = inkScale(raw); if (ent.str !== s){ ent.el.innerHTML = s; ent.str = s; changed.push(ent.el); } } } }
       else {
         const key = JSON.stringify(n.g || {});
         if (ent.key !== key){ for (const a of [...ent.el.attributes]) ent.el.removeAttribute(a.name);
@@ -724,11 +725,11 @@ function mountFigure(cfg){
     } else {
       if (layerState.length){ art.textContent = ''; for (const e of layerState) e.el.remove(); layerState = []; lastWhole = null; if (SPLIT) arrange([]); }
       if (XF || ATTR){ if (res !== lastRaw){ lastRaw = res; const s = finish(res); lastWhole = s; write(art, s); changed.push(art); } }
-      else { const s = inkScale(res);
+      else if (res !== lastRaw || lastInk !== INK_K){ lastRaw = res; lastInk = INK_K; const s = inkScale(res);
         if (s !== lastWhole){ art.innerHTML = s; lastWhole = s; changed.push(art); } }
     }
     ui.changed = changed; };
-  let lastRaw = null;
+  let lastRaw = null, lastInk = null;
   /* ?split=1. Every top-level layer has an age: renders since its string last changed. Consecutive layers that are all
      "hot" (changed in the last HOT_N renders) or all still share one pane, an <svg class="lay"> stacked over #fig with the
      same viewBox and size, on its own compositing layer (will-change), so that a frame repaints only the panes whose layers
@@ -1367,20 +1368,28 @@ const DIAG = new URLSearchParams(location.search), DIAG_FREEZE = DIAG.get('freez
 const drawNow = () => DIAG_FREEZE ? DIAG_T0 : performance.now();
 
 /* ---------- steam: soft white wisps rising and drifting (the toaster's smoke technique, pale) ---------- */
-function wisp(base, ph, n, step, sway, dir, alpha, w0 = 3.2){
+// every animated state value that feeds a colour, an opacity or a size is rounded to steps before it is drawn, so a layer
+// that is only fading (the element's glow, the disc, the steam) is rewritten a few dozen times, not on every frame
+const qz = (v, n = 16) => Math.round(v*n)/n;
+// steam is soft white: two stacked translucent strokes per run of the wisp are enough to read as a soft edge (the engine's
+// default of 5 bands makes ~200 overlapping wide translucent paths per frame, which is what a tablet chokes on)
+// (3 bands outside, where the steam is the subject; 2 inside, seen through the ghosted shell)
+const STEAM_BANDS = 3, STEAM_BANDS_IN = 2;
+const steamPaths = (d, strokes, bands) => glowOn() ? bandPaths(d, strokes, '', bands) : softStrokes(d, strokes);
+function wisp(base, ph, n, step, sway, dir, alpha, w0 = 3.2, bands = STEAM_BANDS){
   if (DIAG_NOSTEAM) return { pts: [], svg: '' };
   const t = drawNow(), pts = [];
   for (let i = 0; i <= n; i++){
     const sx = Math.sin(t/620 + ph + i*.55)*(.5 + i*.32)*sway, sy = Math.cos(t/760 + ph + i*.42)*(.4 + i*.26)*sway;
     pts.push([base[0] + sx + dir[0]*i, base[1] + sy + dir[1]*i, base[2] + i*step]); }
   const seg = (p0, p1, w, o) => { const d = pd(pts.slice(p0, p1 + 1), false);
-    return softStrokes(d, [['#7f8f99', w + 1.8, (.5*o*alpha).toFixed(3)], ['#ffffff', w, (o*alpha).toFixed(3)]]); };
+    return steamPaths(d, [['#7f8f99', w + 1.8, (.5*o*alpha).toFixed(3)], ['#ffffff', w, (o*alpha).toFixed(3)]], bands); };
   const h = Math.floor(n/2);
   return { pts, svg: seg(0, h, w0, .8) + seg(h - 1, n, w0*.7, .5) };
 }
 // outside steam: from the spout mouth and around the lid; front = the wisps on the viewer's side of the kettle
 function steamOutside(st){
-  const a = st.steam, front = [], back = [];
+  const a = qz(st.steam), front = [], back = [];
   if (a < .02) return { front:'', back:'' };
   const C0 = SPOUT_C;
   let spw = '';
@@ -1411,35 +1420,42 @@ function baseSvg(st){
   s += cylX(KX - BR - 2, KX - BR + .4, KY, TZ + 3.2, 1.9, LEVM, toneI, 1, 14);
   return part('sockel', s);
 }
-function bodySvg(st, m){
-  let s = '';
-  for (let i = 0; i < KR.length - 1; i++) s += loft(kRing(KR[i][0], KR[i][1]), kRing(KR[i+1][0], KR[i+1][1]), n => tone(n, KM));
-  s += fill(pd(kRing(ZT, 26.6)), KM.l) + ink(pd(kRing(ZT, 26.6)), 1.4);
-  // the chamfer seam at the foot (near half only)
-  const [h0, h1] = nearHalf(), seam = Array.from({length:19}, (_, i) => surf((h0 + (h1 - h0)*i/18)*DEG, ZB + 2.6, 0));
-  s += line(seam, .8);
-  // the water window: dark glass, the water up to its level, MIN / MAX ticks
+// the water window: dark glass, the water up to its level, MIN / MAX ticks. The water wobbles and bubbles every frame while it
+// boils, so it is drawn on its own (see kettleSvg); the glass and the ticks never change and are kept (memo)
+function windowSvg(st){
   const wa = (WIN.a0 + WIN.a1)/2;
-  if (facing(nAt(wa))){
-    const zl = Math.min(WIN.z1, zWater(st.water) + (st.steam > .1 ? Math.sin(drawNow()/90)*.6*st.steam : 0));
-    let w = shape(patch(WIN.a0, WIN.a1, WIN.z0, WIN.z1, .25), '#56666d', 1.3);
-    if (zl > WIN.z0 + .3) w += fill(pd(patch(WIN.a0 + .4*DEG, WIN.a1 - .4*DEG, WIN.z0 + .3, zl, .3)), '#7cc4e6') + ink(pd([surf(WIN.a0, zl, .32), surf(wa, zl, .32), surf(WIN.a1, zl, .32)], false), .6);
-    if (st.temp > .6 && zl > WIN.z0 + 3 && !DIAG_NOBUB){ const b = clamp01((st.temp - .6)/.4), t = drawNow(); let dots = '';
-      for (let i = 0; i < 6; i++){ const u = (t/(1900 - 700*b) + i*.19) % 1, z = WIN.z0 + 1 + u*(zl - WIN.z0 - 2), [X, Y] = P(...surf(WIN.a0 + (1 + (i*3.7) % 14)*DEG, z, .4));
-        dots += `<circle cx="${f(X)}" cy="${f(Y)}" r="${(.5*CAM_K*(.6 + .6*b)).toFixed(2)}" fill="#ffffff" opacity=".8"/>`; }
-      w += dots; }
+  if (!facing(nAt(wa))) return '';
+  const sq = qz(st.steam), zl = Math.min(WIN.z1, zWater(st.water) + (sq > .1 ? Math.sin(drawNow()/90)*.6*sq : 0));
+  let w = memo('win-glass', () => shape(patch(WIN.a0, WIN.a1, WIN.z0, WIN.z1, .25), '#56666d', 1.3));
+  if (zl > WIN.z0 + .3) w += fill(pd(patch(WIN.a0 + .4*DEG, WIN.a1 - .4*DEG, WIN.z0 + .3, zl, .3)), '#7cc4e6') + ink(pd([surf(WIN.a0, zl, .32), surf(wa, zl, .32), surf(WIN.a1, zl, .32)], false), .6);
+  if (st.temp > .6 && zl > WIN.z0 + 3 && !DIAG_NOBUB){ const b = qz(clamp01((st.temp - .6)/.4)), t = drawNow(); let dots = '';
+    for (let i = 0; i < 6; i++){ const u = (t/(1900 - 700*b) + i*.19) % 1, z = WIN.z0 + 1 + u*(zl - WIN.z0 - 2), [X, Y] = P(...surf(WIN.a0 + (1 + (i*3.7) % 14)*DEG, z, .4));
+      dots += `<circle cx="${f(X)}" cy="${f(Y)}" r="${(.5*CAM_K*(.6 + .6*b)).toFixed(2)}" fill="#ffffff" opacity=".8"/>`; }
+    w += dots; }
+  return part('vatten', w + memo('win-ticks', () => { let t = '';
     for (const [lv, lab] of [[1, 'MAX'], [.2, 'MIN']]){ const z = zWater(lv);
-      w += ink(pd([surf(WIN.a0 - 3*DEG, z, .3), surf(WIN.a1, z, .3)], false), .9) + txA(WIN.a0 - 11*DEG, z - 1.2, lab, 3.2, INK, 800); }
-    if (WIN_SPLIT) WIN_LAYER = part('vatten', w); else s += part('vatten', w);
-  }
-  // model plate on the back
-  const pa = 220*DEG;
-  if (facing(nAt(pa))){
-    s += shape(patch(pa - 17*DEG, pa + 17*DEG, ZB + 22, ZB + 36, .25), '#e0e4e6', 1);
-    s += txA(pa, ZB + 28, '230V~ 2200W', 2.6, INK, 800);
-  }
-  s += hullInk(KR.flatMap(([z, r]) => kRing(z, r)), 2.8);
-  return s;
+      t += ink(pd([surf(WIN.a0 - 3*DEG, z, .3), surf(WIN.a1, z, .3)], false), .9) + txA(WIN.a0 - 11*DEG, z - 1.2, lab, 3.2, INK, 800); }
+    return t; }));
+}
+// apart from the window the body is the same every frame; split = the window is drawn elsewhere (a layer of its own)
+function bodySvg(st, m, split = false){
+  const head = memo('body-a', () => {
+    let s = '';
+    for (let i = 0; i < KR.length - 1; i++) s += loft(kRing(KR[i][0], KR[i][1]), kRing(KR[i+1][0], KR[i+1][1]), n => tone(n, KM));
+    s += fill(pd(kRing(ZT, 26.6)), KM.l) + ink(pd(kRing(ZT, 26.6)), 1.4);
+    // the chamfer seam at the foot (near half only)
+    const [h0, h1] = nearHalf(), seam = Array.from({length:19}, (_, i) => surf((h0 + (h1 - h0)*i/18)*DEG, ZB + 2.6, 0));
+    return s + line(seam, .8); });
+  const tail = memo('body-b', () => {
+    let s = '';
+    // model plate on the back
+    const pa = 220*DEG;
+    if (facing(nAt(pa))){
+      s += shape(patch(pa - 17*DEG, pa + 17*DEG, ZB + 22, ZB + 36, .25), '#e0e4e6', 1);
+      s += txA(pa, ZB + 28, '230V~ 2200W', 2.6, INK, 800);
+    }
+    return s + hullInk(KR.flatMap(([z, r]) => kRing(z, r)), 2.8); });
+  return head + (split ? '' : windowSvg(st)) + tail;
 }
 function lidSvg(st, m){
   const L0 = kRing(ZT, 26.3), L1 = kRing(ZT + 2.2, 24.6), L2 = kRing(ZT + 3.4, 17.5);
@@ -1464,6 +1480,9 @@ const lampLit = st => st.on && !st.loose;                  // the lamp sits on t
 // the rocker switch and the power light on the housing's +y side. The rocker is a switch (act) AND a part.
 function rockerSvg(st){
   if (!facing([0,1,0])) return '';
+  return memo('rocker|' + (st.on ? 1 : 0) + (lampLit(st) ? 1 : 0), () => rockerDraw(st));
+}
+function rockerDraw(st){
   const y = HOUS.y1, lit = lampLit(st);
   const rx = KX - 47;                                                                  // on the rocker's axle
   let s = shape(on(PY(y + .05), rectUV(rx - 5.6, ZB + 3.9, rx + 5.6, ZB + 11.1)), '#2b2523', .8);
@@ -1485,36 +1504,42 @@ function gripSvg(st, m){
 // the whole closed shell in a correct order for this view: the handle and the spout sit on opposite sides of the round body
 // in see-through (k > 0) the body, lid and spout fade to a ghost; the handle, which holds the controller, fades less.
 // Returns { shell, over }: over is the handle's arch when it is nearer than the insides (it goes on top of the working parts)
-function shellSvg(st, m, k = 0){
-  const g = (s, o) => k > 0 ? `<g opacity="${f(o)}">${s}</g>` : s, fF = facing([1,0,0]);
-  const hs = g(housingSvg(st, m), 1 - .6*k), gr = g(gripSvg(st, m), 1 - .6*k);
-  const rest = g(fF ? bodySvg(st, m) + lidSvg(st, m) + spoutSvg(st) : spoutSvg(st) + bodySvg(st, m) + lidSvg(st, m), 1 - .8*k);
-  if (fF) return { shell: hs + gr + rest, over: '' };
-  return k > 0 ? { shell: rest + hs, over: gr } : { shell: rest + hs + gr, over: '' };
+// split: the water window is not in it (kettleSvg draws it as a layer of its own); then the shell depends on nothing that
+// animates and the whole result is kept. Without split it holds the window, which wobbles, so only its pieces are kept.
+function shellSvg(st, m, k = 0, split = false){
+  const sk = st.pal + '|' + (st.on ? 1 : 0) + (lampLit(st) ? 1 : 0);   // everything besides the camera that the pieces depend on
+  const build = () => {
+    const g = (s, o) => k > 0 ? `<g opacity="${f(o)}">${s}</g>` : s, fF = facing([1,0,0]);
+    const hs = g(memo('hous|' + sk, () => housingSvg(st, m)), 1 - .6*k), gr = g(memo('grip|' + st.pal, () => gripSvg(st, m)), 1 - .6*k);
+    const lid = memo('lid|' + st.pal, () => lidSvg(st, m)), spout = memo('spout', () => spoutSvg(st)), body = bodySvg(st, m, split);
+    const rest = g(fF ? body + lid + spout : spout + body + lid, 1 - .8*k);
+    if (fF) return { shell: hs + gr + rest, over: '' };
+    return k > 0 ? { shell: rest + hs, over: gr } : { shell: rest + hs + gr, over: '' };
+  };
+  return split ? memo('shell|' + sk + '|' + k.toFixed(3), build) : build();
 }
 // kettleSvg returns an ARRAY of strings (layers, back to front): the engine redraws only those that changed since the last
 // frame (the shell and most working parts are the same every frame; the water, bubbles and steam are not)
-// ?split=1 speed test: in see-through the window (its water wobbles and bubbles every frame) is taken out of the ghosted shell
-// into a layer of its own just after it, so the big shell layer stays still and its pane is not repainted. (It then draws
-// over the shell's outline instead of under it, at the same ghost opacity; a very small change in look.)
-let WIN_SPLIT = false, WIN_LAYER = '';
+// In see-through the window (its water wobbles and bubbles every frame) is taken out of the ghosted shell into a layer of its
+// own just after it, so the big shell layer stays still and its pane is not repainted. (It then draws over the shell's outline
+// instead of under it, at the same ghost opacity; a very small change in look.) Everything that does not move is kept with
+// memo(), keyed on the (rounded) state it depends on, so a steady frame only builds the water, bubbles, puffs and steam.
 function kettleSvg(st, m, k){
-  WIN_SPLIT = PILLA_OPT.split && k > 0; WIN_LAYER = '';
-  const so = steamOutside(st), sh = shellSvg(st, m, k);
-  WIN_SPLIT = false;
+  const split = PILLA_OPT.split && k > 0, so = steamOutside(st), sh = shellSvg(st, m, k, split);
   if (!(k > 0)) return [so.back, sh.shell, so.front];
+  const win = split ? windowSvg(st) : '', sk = st.pal + '|' + (st.on ? 1 : 0) + (lampLit(st) ? 1 : 0) + '|' + k.toFixed(3);
   // far inner walls faintly, the shell as a ghost, then the working parts over it and the switch redrawn on top
-  let far = '';
-  for (let i = 0; i < KR.length - 1; i++) far += loft(kRing(KR[i][0], KR[i][1]), kRing(KR[i+1][0], KR[i+1][1]), n => mix(toneI(n.map(v => -v), KM), '#f2efe7', .55), true);
-  far += fill(pd(kRing(ZB, KR[0][1])), mix(KM.d, '#f2efe7', .5));
-  const ghost = `<g opacity="${f(.5*k)}">${far}</g>${sh.shell}<g opacity="${f(.6*k)}">${hullInk(KR.flatMap(([z, r]) => kRing(z, r)), 2.8)}</g>`;
+  const ghost = memo('ghost|' + sk, () => {
+    let far = '';
+    for (let i = 0; i < KR.length - 1; i++) far += loft(kRing(KR[i][0], KR[i][1]), kRing(KR[i+1][0], KR[i+1][1]), n => mix(toneI(n.map(v => -v), KM), '#f2efe7', .55), true);
+    far += fill(pd(kRing(ZB, KR[0][1])), mix(KM.d, '#f2efe7', .5));
+    return `<g opacity="${f(.5*k)}">${far}</g>${sh.shell}<g opacity="${f(.6*k)}">${hullInk(KR.flatMap(([z, r]) => kRing(z, r)), 2.8)}</g>`; });
   // the working parts fade in as one group while see-through is easing in; once it is fully on (opacity 1, no visible
   // effect) they are separate layers
   const mech = [...kettleMech(st, k), rockerSvg(st), faultTop(st)];
-  let hits = '';
-  if (k > .6) hits = hitLine('element', Array.from({length:17}, (_, i) => eP(200 + i*20)), 2.4) + hitLine('angror', TUBE, 2.6)
-    + hitDot('bimetall', [CX, KY, DZ + .5], DR + 1.5) + hitDot('kontakt', [KX, KY, ZB + 2.2], 6);
-  return [so.back, ghost, ...(WIN_LAYER ? [`<g opacity="${f(1 - .8*k)}">${WIN_LAYER}</g>`] : []), ...(k >= 1 ? mech : [`<g opacity="${f(k)}">${mech.join('')}</g>`]), sh.over + hits, so.front];
+  const over = memo('over|' + sk, () => sh.over + (k > .6 ? hitLine('element', Array.from({length:17}, (_, i) => eP(200 + i*20)), 2.4) + hitLine('angror', TUBE, 2.6)
+    + hitDot('bimetall', [CX, KY, DZ + .5], DR + 1.5) + hitDot('kontakt', [KX, KY, ZB + 2.2], 6) : ''));
+  return [so.back, ghost, ...(win ? [`<g opacity="${f(1 - .8*k)}">${win}</g>`] : []), ...(k >= 1 ? mech : [`<g opacity="${f(k)}">${mech.join('')}</g>`]), over, so.front];
 }
 
 /* ---------- see-through: how a real cordless kettle works ----------
@@ -1566,7 +1591,7 @@ function along(pts, u){
 // steam travelling down a healthy tube: white puffs from the inlet toward the disc (the front reaches the disc at STEAM_MS)
 function tubeSteam(st, upper){
   if (st.kalk || st.steam < .05 || DIAG_NOBUB) return '';
-  const boiling = isBoiling(st), front = boiling ? Math.min(1, st.boilMs / STEAM_MS) : 1, a = boiling ? 1 : st.steam, t = drawNow();
+  const boiling = isBoiling(st), front = boiling ? Math.min(1, st.boilMs / STEAM_MS) : 1, a = boiling ? 1 : qz(st.steam), t = drawNow();
   let s = '';
   for (let i = 0; i < 8; i++){ const u = ((t/900 + i/8) % 1) * front, p = along(TUBE, u);
     if ((p[2] >= TUBE[TUBE_SPLIT][2]) !== upper) continue;
@@ -1577,8 +1602,11 @@ function tubeSteam(st, upper){
 // Loose connector: the pin leans away and its tip stops short of the pad, with clear air between them.
 // Repair (st.rep.kontakt, seconds): A 0-.8 the bent pin straightens | B .8-1.4 it is pushed home | C 1.4-2.0 it clicks (a ring at the pad)
 function kontaktSvg(st){
-  let sv, click = '';
   const kr = repT(st, 'kontakt');
+  return memo('kontakt|' + (st.loose ? 1 : 0) + '|' + kr.toFixed(3), () => kontaktDraw(st, kr));
+}
+function kontaktDraw(st, kr){
+  let sv, click = '';
   if (st.loose && kr < 1.4){
     const lean = kr < 0 ? 1 : 1 - ease(clamp01(kr/.8)), push = kr < .8 ? 0 : ease(clamp01((kr - .8)/.6));
     const bend = [KX + 3.8*lean, KY - 3.6*lean, ZB + 3.1 + 1.4*push];
@@ -1619,29 +1647,40 @@ function kettleMech(st, k){
   const live = powered ? '#ff6a2a' : !st.loose ? '#b5482d' : '#8a3a24', liveSw = powered ? '#ff6a2a' : '#8a3a24', neu = '#3d6fb8';
   // ---- under the floor: connector socket with the pin in it, element, boil-dry disc, wiring
   put([[KX - 6, KY - 6, ZB - .1], [KX + 6, KY + 6, ZB + 5.4]], part('kontakt', kontaktSvg(st)));
-  const eg = st.glow, base = '#8d9396', ec = eg > .02 ? mix(base, '#ff5a1f', eg) : base, EM = matOf(ec), er = elRep(st);
-  for (let a = 200; er.show && er.op > .02 && a < 520; a += 20){ const p = eP(a, er.dz), q = eP(a + 20, er.dz);
-    let sv;
-    if (er.broken && a === EBREAK) sv = elBreakSvg(false, er.dz);
-    else {
-      sv = rod(p, q, 1.3, EM, toneI, .5, 1.3, 10);
-      if (eg > .05) sv += glowLine(pd([p, q], false), '#ff8a3d', 3.4, f(.55*eg), 'stroke-linecap="round" pointer-events="none"');
-    }
-    if (er.op < 1) sv = `<g opacity="${f(er.op)}">${sv}</g>`;
-    put(kBoxOf([p, q]).map((c, i) => [c[0], c[1], i ? EZ + 1.3 + er.dz : EZ - 1.3 + er.dz]), part('element', sv)); }
-  // cold tails at the back of the horseshoe
-  for (const a of [160, 200]){ const p = eP(a); put([[p[0] - 2.5, p[1] - .6, ZB + 1.4], [p[0] + .6, p[1] + .6, EZ]], part('element', rod(p, [p[0] - 2, p[1], ZB + 2], .7, METAL, toneI, .5))); }
-  put([[KX - 25.2, KY - 10.2, ZB + 2.9], [KX - 20.8, KY - 5.8, ZB + 4.4]], cyl(KX - 23, KY - 8, ZB + 2.9, ZB + 4.4, 2.2, TCOP, toneI, .6, 16));    // boil-dry disc
-  put([[KX - 24.8, KY - 9.8, ZB + 2.2], [KX - 21.2, KY - 6.2, ZB + 2.9]], box(KX - 24.8, KY - 9.8, ZB + 2.2, KX - 21.2, KY - 6.2, ZB + 2.8, TGM, toneI, .5));   // its clip
-  put([[KX - 23.5, KY - 8.5, ZB], [KX - 22.5, KY - 7.5, ZB + 2.2]], rod([KX - 23, KY - 8, ZB + .1], [KX - 23, KY - 8, ZB + 2.2], .5, TGM, toneI, .4));    // post on the bottom cover
-  parts.push(kWire([[KX - 3, KY - 1.5, ZB + 1.2], [KX - 30.8, KY - 1.5, ZB + 1.2]], live));                               // live: socket -> controller
-  parts.push(kWire([[KX - 30.8, KY + 4.9, ZB + 2], [KX - 19.85, eP(160)[1], ZB + 2]], liveSw));                              // switched live -> element tail A
-  parts.push(kWire([[KX - 4.5, KY - 3.5, ZB + 1.2], [KX - 20.5, KY - 8, ZB + 1.6], [KX - 21.6, KY - 8, ZB + 3]], neu));       // neutral -> boil-dry disc
-  parts.push(kWire([[KX - 24.6, KY - 7, ZB + 3], [KX - 24.6, eP(200)[1], ZB + 2.2], [KX - 19.85, eP(200)[1], ZB + 2]], neu));   // boil-dry disc -> element tail B
-  // ---- the floor plate (half see-through so the element reads under it)
-  put([[KX - 30, KY - 30, ZB + 4.4], [KX + 30, KY + 30, ZF]], `<g opacity=".35" pointer-events="none">${cyl(KX, KY, ZB + 4.4, ZF, 30, METAL, toneI, .8, 36)}</g>`);
+  // (the glow is rounded to steps: the element is rewritten a few dozen times while it heats and cools, not on every frame)
+  const eg = qz(st.glow), er = elRep(st);
+  parts.push(...memo(`elem|${eg}|${er.show ? 1 : 0}|${er.op.toFixed(3)}|${er.dz.toFixed(3)}|${er.broken ? 1 : 0}`, () => {
+    const out = [], base = '#8d9396', ec = eg > .02 ? mix(base, '#ff5a1f', eg) : base, EM = matOf(ec);
+    for (let a = 200; er.show && er.op > .02 && a < 520; a += 20){ const p = eP(a, er.dz), q = eP(a + 20, er.dz);
+      let sv;
+      if (er.broken && a === EBREAK) sv = elBreakSvg(false, er.dz);
+      else {
+        sv = rod(p, q, 1.3, EM, toneI, .5, 1.3, 10);
+        if (eg > .05) sv += glowLine(pd([p, q], false), '#ff8a3d', 3.4, f(.55*eg), 'stroke-linecap="round" pointer-events="none"');
+      }
+      if (er.op < 1) sv = `<g opacity="${f(er.op)}">${sv}</g>`;
+      out.push({ box: kBoxOf([p, q]).map((c, i) => [c[0], c[1], i ? EZ + 1.3 + er.dz : EZ - 1.3 + er.dz]), svg: part('element', sv) }); }
+    return out; }));
+  // the rest of the base-level parts only change colour with the supply (live), never with time
+  parts.push(...memo(`mech-low|${live}|${liveSw}`, () => {
+    const out = [], o = (b, svg) => out.push({ box: b, svg });
+    // cold tails at the back of the horseshoe
+    for (const a of [160, 200]){ const p = eP(a); o([[p[0] - 2.5, p[1] - .6, ZB + 1.4], [p[0] + .6, p[1] + .6, EZ]], part('element', rod(p, [p[0] - 2, p[1], ZB + 2], .7, METAL, toneI, .5))); }
+    o([[KX - 25.2, KY - 10.2, ZB + 2.9], [KX - 20.8, KY - 5.8, ZB + 4.4]], cyl(KX - 23, KY - 8, ZB + 2.9, ZB + 4.4, 2.2, TCOP, toneI, .6, 16));    // boil-dry disc
+    o([[KX - 24.8, KY - 9.8, ZB + 2.2], [KX - 21.2, KY - 6.2, ZB + 2.9]], box(KX - 24.8, KY - 9.8, ZB + 2.2, KX - 21.2, KY - 6.2, ZB + 2.8, TGM, toneI, .5));   // its clip
+    o([[KX - 23.5, KY - 8.5, ZB], [KX - 22.5, KY - 7.5, ZB + 2.2]], rod([KX - 23, KY - 8, ZB + .1], [KX - 23, KY - 8, ZB + 2.2], .5, TGM, toneI, .4));    // post on the bottom cover
+    out.push(kWire([[KX - 3, KY - 1.5, ZB + 1.2], [KX - 30.8, KY - 1.5, ZB + 1.2]], live));                               // live: socket -> controller
+    out.push(kWire([[KX - 30.8, KY + 4.9, ZB + 2], [KX - 19.85, eP(160)[1], ZB + 2]], liveSw));                              // switched live -> element tail A
+    out.push(kWire([[KX - 4.5, KY - 3.5, ZB + 1.2], [KX - 20.5, KY - 8, ZB + 1.6], [KX - 21.6, KY - 8, ZB + 3]], neu));       // neutral -> boil-dry disc
+    out.push(kWire([[KX - 24.6, KY - 7, ZB + 3], [KX - 24.6, eP(200)[1], ZB + 2.2], [KX - 19.85, eP(200)[1], ZB + 2]], neu));   // boil-dry disc -> element tail B
+    // ---- the floor plate (half see-through so the element reads under it)
+    o([[KX - 30, KY - 30, ZB + 4.4], [KX + 30, KY + 30, ZF]], `<g opacity=".35" pointer-events="none">${cyl(KX, KY, ZB + 4.4, ZF, 30, METAL, toneI, .8, 36)}</g>`);
+    return out; }));
   // ---- the water, with the steam tube inside it on the handle side, bubbles, and steam over it
-  { let w = '', tb = tubeStroke(TUBE.slice(0, TUBE_SPLIT + 1), .9, TUBE_M, .8), crust = '';
+  { let w = '';
+    // the tube and its limescale plug are the same every frame unless a repair is playing; only the puffs in it move
+    const tube = memo(`tube|${st.kalk ? 1 : 0}|${repT(st, 'kalk').toFixed(3)}`, () => {
+    let tb = tubeStroke(TUBE.slice(0, TUBE_SPLIT + 1), .9, TUBE_M, .8), crust = '';
     if (!st.kalk){ if (facing([1,0,0])) tb += fill(pd(on(PX(TUBE[0][0] + .05), ellUV(KY, TUBE[0][2], .6, .6, 10))), '#2b2523'); }
     else {
       // the limescale plug: lumpy chalky blobs filling and crusting the inlet
@@ -1662,13 +1701,14 @@ function kettleMech(st, k){
       if (spA > .01) for (const [dx, dy, dz] of [[.5,.3,.4],[-.3,-1.1,1.2],[1.5,.8,-.5],[.8,-1.4,-.2],[2.1,-.2,1],[-.6,1.2,.2]]){ const [X, Y] = P(TUBE[0][0] + dx, TUBE[0][1] + dy, TUBE[0][2] + dz);
         crust += `<circle cx="${f(X)}" cy="${f(Y)}" r="${(.45*CAM_K).toFixed(2)}" fill="#cbbf9a"${oa(spA)}/>`; }
     }
-    tb = part('angror', tb + crust + tubeSteam(st, true));
+    return part('angror', tb + crust); });
+    const puffs = tubeSteam(st, true), sq = qz(st.steam);
     if (st.water > .02){
-      const zW = zWater(st.water), amp = boiling ? .9*st.steam : st.steam*.3, n = 28;
+      const zW = zWater(st.water), amp = boiling ? .9*sq : sq*.3, n = 28;
       const WA = kRing(ZF + .15, rAt(ZF) - 1.6, n), WB = kRing(zW, rAt(zW) - 1.6, n).map(([x, y, z], i) => [x, y, z + amp*Math.sin(i*3*2*Math.PI/n + t/330)*Math.sin(i*2*Math.PI/n*2 + t/470)]);
       w += `<g opacity=".26">${loft(WA, WB, n2 => toneI(n2, WATERM), true)}</g>`;
       // bubbles: they form on the hot floor and rise, more and bigger toward the boil
-      const b = clamp01((st.temp - .6)/.4);
+      const b = qz(clamp01((st.temp - .6)/.4));
       if (b > 0 && !DIAG_NOBUB){ let bs = ''; const cnt = Math.round(6 + 20*b);
         for (let i = 0; i < cnt; i++){ const an = i*2.39996, rr = 4 + (i*7.7) % 22, u = (t/(2200 - 900*b) + i*.137) % 1, z = ZF + .6 + u*(zW - ZF - .8);
           const [X, Y] = P(KX + rr*Math.cos(an), KY + rr*Math.sin(an), z), sz = (.35 + .7*u)*(.6 + .9*b);
@@ -1679,37 +1719,45 @@ function kettleMech(st, k){
     }
     // steam over the water (and swirling round a blocked inlet without going in)
     let sm = '';
-    if (st.steam > .02 && st.water > .02){ const zW = zWater(st.water), top = ZT - 2, n = Math.max(2, Math.floor((top - zW)/3.2));
-      [[8, 6], [-6, 10], [4, -10], [-14, -2]].forEach(([dx, dy], i) => { sm += wisp([KX + dx, KY + dy, zW + .5], i*1.9, n, (top - zW - .5)/n, .8, [-.35, 0], st.steam, 3.2).svg; });
-      if (st.kalk && !(repT(st, 'kalk') > 2)) sm += wisp([KX - 16, KY + 1, ZT - 12], 4.2, 3, 2.2, 1.6, [.9, 0], st.steam*.8, 2).svg;
+    if (sq > .02 && st.water > .02){ const zW = zWater(st.water), top = ZT - 2, n = Math.max(2, Math.floor((top - zW)/3.2));
+      [[8, 6], [-6, 10], [4, -10], [-14, -2]].forEach(([dx, dy], i) => { sm += wisp([KX + dx, KY + dy, zW + .5], i*1.9, n, (top - zW - .5)/n, .8, [-.35, 0], sq, 3.2, STEAM_BANDS_IN).svg; });
+      if (st.kalk && !(repT(st, 'kalk') > 2)) sm += wisp([KX - 16, KY + 1, ZT - 12], 4.2, 3, 2.2, 1.6, [.9, 0], sq*.8, 2, STEAM_BANDS_IN).svg;
       sm = softGroup(sm); }
-    const svg = facing([-1,0,0]) ? w + tb + sm : tb + w + sm;
-    put([[KX - 31.2, KY - 31.2, ZF], [KX + 31.2, KY + 31.2, ZT]], svg); }
+    // one item of separate layers (water, the tube, its puffs, steam) in the right order: the still tube is not repainted with the water
+    const tubeL = [tube, puffs ? part('angror', puffs) : ''];
+    put([[KX - 31.2, KY - 31.2, ZF], [KX + 31.2, KY + 31.2, ZT]], facing([-1,0,0]) ? [w, ...tubeL, sm] : [...tubeL, w, sm]); }
   // the tube's lower part: out through the back wall into the controller, ending over the disc
-  put([[TUBE[5][0] - 1, KY - 1, TUBE[5][2] - .2], [TUBE[3][0] + 1, KY + 1, TUBE[3][2] + .9]], part('angror', tubeStroke(TUBE.slice(TUBE_SPLIT), .9, TUBE_M, .8) + tubeSteam(st, false)));
+  { const puffs = tubeSteam(st, false);
+    put([[TUBE[5][0] - 1, KY - 1, TUBE[5][2] - .2], [TUBE[3][0] + 1, KY + 1, TUBE[3][2] + .9]],
+      [memo('tube-low', () => part('angror', tubeStroke(TUBE.slice(TUBE_SPLIT), .9, TUBE_M, .8))), puffs ? part('angror', puffs) : '']); }
   // ---- the controller: thermostat disc on its seat, push pin, trip lever, rocker axle, cam, contacts
   //   the disc's dish bulges up while flat (cold) and flips down when it snaps; the push pin under it drops with it,
   //   tipping the trip lever whose far end throws the rocker's axle; the axle's cam lifts the moving contact blade
-  const d = st.disc, hdome = 1.2*(1 - 2*d), AX = KX - 47, AZ = ZB + 7.5;     // rocker axle (x, z), running along y
+  const d = qz(st.disc, 24), hdome = 1.2*(1 - 2*d), AX = KX - 47, AZ = ZB + 7.5;     // rocker axle (x, z), running along y
   const pinZ = ZB + 6 - 1.4*d;
   // push pin, seat and disc stack on one axis, bottom to top: one item drawn in that order (they never need another)
-  { const pin = rod([CX, KY, DZ - 1], [CX, KY, pinZ], .55, METAL, toneI, .5), seat = cyl(CX, KY, DZ - 1, DZ - .1, DR + .6, TGM, toneI, .7, 22);
+  put([[CX - DR - .6, KY - DR - .6, pinZ], [CX + DR + .6, KY + DR + .6, DZ + 1.3]], memo('disc|' + d, () => {
+    const pin = rod([CX, KY, DZ - 1], [CX, KY, pinZ], .55, METAL, toneI, .5), seat = cyl(CX, KY, DZ - 1, DZ - .1, DR + .6, TGM, toneI, .7, 22);
     const D0 = kRing(DZ, DR, 22, CX, KY), D1 = kRing(DZ + hdome, DR*.45, 22, CX, KY), DM = { l:'#f6d6b0', m:'#dca36a', d:'#a56c38' };
     let sv = loft(D0, D1, n => toneI(n, DM), hdome < 0) + fill(pd(D1), DM.l) + ink(pd(D1), .5) + ink(pd(D0), .9) + hullInk([...D0, ...D1], 1);
     if (d > .05) sv += glowFill(pd(kRing(DZ + .5, DR + 1, 22, CX, KY)), '#ffd08a', f(.5*d), 'pointer-events="none"');
-    put([[CX - DR - .6, KY - DR - .6, pinZ], [CX + DR + .6, KY + DR + .6, DZ + 1.3]], part('bimetall', pin + seat + sv)); }
-  put([[AX - .5, KY - .7, pinZ - .7], [CX + .7, KY + 3.8, AZ + .7]], part('vippbrytare', rod([CX, KY, pinZ], [AX, KY + 3, AZ], .6, TGM, toneI, .6)));
-  put([[AX - .8, KY - 5.5, AZ - .8], [AX + .8, HOUS.y1, AZ + .8]], part('vippbrytare', rod([AX, KY - 5.5, AZ], [AX, HOUS.y1, AZ], .8, METAL, toneI, .6)));
+    return part('bimetall', pin + seat + sv); }));
   const bladeZ = st.on ? ZB + 4.1 : ZB + 6;                                   // the moving blade's tip: down on the contact when on
-  put([[AX - .6, KY - 4.8, bladeZ + .2], [AX + 1.4, KY - 3.6, AZ]], part('vippbrytare', rod([AX, KY - 4.2, AZ], [AX + .9, KY - 4.2, bladeZ + .6], .5, TGM, toneI, .5)));
-  put([[KX - 56, KY - 6, ZB + 1.5], [KX - 52, KY - 2.5, ZB + 7]], box(KX - 56, KY - 6, ZB + 1.5, KX - 52, KY - 2.5, ZB + 7, matOf('#e8e4da'), toneI, .7));
-  put([[KX - 52, KY - 5, ZB + 3], [KX - 42, KY - 3.4, ZB + 3.8]], part('vippbrytare', box(KX - 52, KY - 5, ZB + 3, KX - 42, KY - 3.4, ZB + 3.5, TCOP, toneI, .6)
-    + cyl(KX - 43, KY - 4.2, ZB + 3.5, ZB + 3.8, .8, METAL, toneI, .5, 12)));
-  put([[KX - 52, KY - 5, Math.min(ZB + 5.4, bladeZ) - .5], [KX - 42.4, KY - 3.4, Math.max(ZB + 5.4, bladeZ) + .5]], part('vippbrytare', rod([KX - 52, KY - 4.2, ZB + 5.4], [KX - 43, KY - 4.2, bladeZ], .45, TCOP, toneI, .5)));
-  parts.push(kWire([[KX - 32.6, KY - 1.5, ZB + 1.2], [KX - 50, KY - 1.5, ZB + 1.2], [KX - 51.5, KY - 4.2, ZB + 3]], live));                  // live -> fixed blade
-  parts.push(kWire([[KX - 54, KY - 2.6, ZB + 6.4], [KX - 54, KY + 5, ZB + 2], [KX - 32.6, KY + 5, ZB + 2]], liveSw));                      // moving blade -> element
-  // the power light's leads from the switched side up to the lens
-  parts.push(kWire([[KX - 45.5, KY + 5, ZB + 2], [KX - 45.5, HOUS.y1 - .3, ZB + 13.2]], liveSw, .3));
+  // the trip lever follows the disc (d); the blade follows the switch (st.on); the rest never moves
+  put([[AX - .5, KY - .7, pinZ - .7], [CX + .7, KY + 3.8, AZ + .7]], memo('lever|' + d, () => part('vippbrytare', rod([CX, KY, pinZ], [AX, KY + 3, AZ], .6, TGM, toneI, .6))));
+  put([[AX - .6, KY - 4.8, bladeZ + .2], [AX + 1.4, KY - 3.6, AZ]], memo('blade|' + bladeZ, () => part('vippbrytare', rod([AX, KY - 4.2, AZ], [AX + .9, KY - 4.2, bladeZ + .6], .5, TGM, toneI, .5))));
+  put([[KX - 52, KY - 5, Math.min(ZB + 5.4, bladeZ) - .5], [KX - 42.4, KY - 3.4, Math.max(ZB + 5.4, bladeZ) + .5]], memo('blade-arm|' + bladeZ, () => part('vippbrytare', rod([KX - 52, KY - 4.2, ZB + 5.4], [KX - 43, KY - 4.2, bladeZ], .45, TCOP, toneI, .5))));
+  parts.push(...memo(`mech-ctl|${live}|${liveSw}`, () => {
+    const out = [], o = (b, svg) => out.push({ box: b, svg });
+    o([[AX - .8, KY - 5.5, AZ - .8], [AX + .8, HOUS.y1, AZ + .8]], part('vippbrytare', rod([AX, KY - 5.5, AZ], [AX, HOUS.y1, AZ], .8, METAL, toneI, .6)));
+    o([[KX - 56, KY - 6, ZB + 1.5], [KX - 52, KY - 2.5, ZB + 7]], box(KX - 56, KY - 6, ZB + 1.5, KX - 52, KY - 2.5, ZB + 7, matOf('#e8e4da'), toneI, .7));
+    o([[KX - 52, KY - 5, ZB + 3], [KX - 42, KY - 3.4, ZB + 3.8]], part('vippbrytare', box(KX - 52, KY - 5, ZB + 3, KX - 42, KY - 3.4, ZB + 3.5, TCOP, toneI, .6)
+      + cyl(KX - 43, KY - 4.2, ZB + 3.5, ZB + 3.8, .8, METAL, toneI, .5, 12)));
+    out.push(kWire([[KX - 32.6, KY - 1.5, ZB + 1.2], [KX - 50, KY - 1.5, ZB + 1.2], [KX - 51.5, KY - 4.2, ZB + 3]], live));                  // live -> fixed blade
+    out.push(kWire([[KX - 54, KY - 2.6, ZB + 6.4], [KX - 54, KY + 5, ZB + 2], [KX - 32.6, KY + 5, ZB + 2]], liveSw));                      // moving blade -> element
+    // the power light's leads from the switched side up to the lens
+    out.push(kWire([[KX - 45.5, KY + 5, ZB + 2], [KX - 45.5, HOUS.y1 - .3, ZB + 13.2]], liveSw, .3));
+    return out; }));
   MECH_ITEMS = [
     { at: [KX + 8, KY + 8, (ZF + zWater(Math.max(st.water, .1)))/2], text: partName('vatten'), on: st.temp > .6 && st.water > .05 },
     { at: eP(0), text: partName('element'), on: st.glow > .05 },
@@ -1773,25 +1821,26 @@ function cordItems(){
 /* ---------- scene ---------- */
 function scene(st, m){
   const k = ease(st.xr || 0);
-  let s = `<defs><filter id="tsSoft" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="${(1.4*INK_K).toFixed(2)}"/></filter></defs>`;
-  // the bench board, a little wood grain, then one shadow per object (clipped to the board)
-  s += board(0, 0, BNW, BND, TZ, BNR, WOOD);
-  let grain = ''; for (const [x, y0, y1] of [[14, 12, 120], [34, 40, 170], [58, 8, 90], [84, 30, 150], [106, 6, 100], [124, 60, 168]])
-    grain += pd([[x, y0, TZ], [x + 1.5, (y0 + y1)/2, TZ], [x, y1, TZ]], false);
-  s += `<path d="${grain}" fill="none" stroke="${INK}" ${mw(.7)} opacity=".16"/>`;
-  const kettlePts = [...kRing(TZ, BR, 24), ...KR.flatMap(([z, r]) => kRing(z, r, 24)), ...HANDLE.flatMap(([x, y, z]) => [[x, y - HR, z], [x, y + HR, z]]), ...SPOUT_B,
-    ...boxCorners(HOUS.x0, HOUS.y0, HOUS.z0, HOUS.x1, HOUS.y1, HOUS.z1)];
-  s += castShadow(kettlePts, TZ, BTOP)
-    + castShadow(boxCorners(STRIP.x0, STRIP.y0, TZ, STRIP.x1, STRIP.y1, TZ + STRIP.h), TZ, BTOP);
+  // the bench board, a little wood grain, then one shadow per object (clipped to the board): never changes
+  let s = memo('bench', () => {
+    let s = `<defs><filter id="tsSoft" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="${(1.4*INK_K).toFixed(2)}"/></filter></defs>`;
+    s += board(0, 0, BNW, BND, TZ, BNR, WOOD);
+    let grain = ''; for (const [x, y0, y1] of [[14, 12, 120], [34, 40, 170], [58, 8, 90], [84, 30, 150], [106, 6, 100], [124, 60, 168]])
+      grain += pd([[x, y0, TZ], [x + 1.5, (y0 + y1)/2, TZ], [x, y1, TZ]], false);
+    s += `<path d="${grain}" fill="none" stroke="${INK}" ${mw(.7)} opacity=".16"/>`;
+    const kettlePts = [...kRing(TZ, BR, 24), ...KR.flatMap(([z, r]) => kRing(z, r, 24)), ...HANDLE.flatMap(([x, y, z]) => [[x, y - HR, z], [x, y + HR, z]]), ...SPOUT_B,
+      ...boxCorners(HOUS.x0, HOUS.y0, HOUS.z0, HOUS.x1, HOUS.y1, HOUS.z1)];
+    return s + castShadow(kettlePts, TZ, BTOP)
+      + castShadow(boxCorners(STRIP.x0, STRIP.y0, TZ, STRIP.x1, STRIP.y1, TZ + STRIP.h), TZ, BTOP); });
 
-  let base = baseSvg(st);
-  if (k > 0) base = `<g opacity="${f(1 - .8*k)}">${base}</g><g opacity="${f(k)}">${baseMech(st)}</g>`;
+  const base = memo('base|' + k.toFixed(3) + '|' + (st.loose ? 1 : 0), () => k > 0
+    ? `<g opacity="${f(1 - .8*k)}">${baseSvg(st)}</g><g opacity="${f(k)}">${baseMech(st)}</g>` : baseSvg(st));
   const items = [
     { box:[[KX - BR, KY - BR, TZ], [KX + BR, KY + BR, ZB - .1]], svg: base },
     { box:[[HOUS.x0 - .5, KY - 34, ZB - .1], [SPOUT_C[0] + 2, KY + 34, ZT + 30]], svg: kettleSvg(st, m, k) },
-    { box:[[STRIP.x0, STRIP.y0, TZ], [STRIP.x1, STRIP.y1, TZ + STRIP.h]], svg: rbStrip(st) },
-    { box:[[-1.5, 144.5, TZ], [STRIP.x0, 147.5, TZ + 5.6]], svg: rbStripCord() },
-    ...cordItems() ];
+    { box:[[STRIP.x0, STRIP.y0, TZ], [STRIP.x1, STRIP.y1, TZ + STRIP.h]], svg: memo('strip', () => rbStrip(st)) },
+    { box:[[-1.5, 144.5, TZ], [STRIP.x0, 147.5, TZ + 5.6]], svg: memo('strip-cord', rbStripCord) },
+    ...memo('cord', cordItems) ];
   // layers: the board, shadows and bench props and the kettle's still parts are the same every frame, so the engine does not redraw them
   const layers = [s, ...byDepthL(items)];
   // the opening of the handle's loop is the handle too: a transparent pad over everything, so a finger (or a tap at the middle of the

@@ -708,7 +708,8 @@ function mountFigure(cfg){
         ent = state[i] = { grp, el, str: null, raw: null, key: null, sub: [] }; }
       if (!grp){
         if (XF || ATTR){ const raw = obj ? nodesToString(n) : (n || ''); if (ent.raw !== raw){ ent.raw = raw; const s = finish(raw); ent.str = s; write(ent.el, s); changed.push(ent.el); } }
-        else { const s = inkScale(n || ''); if (ent.str !== s){ ent.el.innerHTML = s; ent.str = s; changed.push(ent.el); } } }
+        else { const raw = n || '';   // compare the raw string first: inkScale (a regex over the whole layer) only runs for a layer that changed (or when the ink scale did)
+          if (ent.raw !== raw || ent.ink !== INK_K){ ent.raw = raw; ent.ink = INK_K; const s = inkScale(raw); if (ent.str !== s){ ent.el.innerHTML = s; ent.str = s; changed.push(ent.el); } } } }
       else {
         const key = JSON.stringify(n.g || {});
         if (ent.key !== key){ for (const a of [...ent.el.attributes]) ent.el.removeAttribute(a.name);
@@ -724,11 +725,11 @@ function mountFigure(cfg){
     } else {
       if (layerState.length){ art.textContent = ''; for (const e of layerState) e.el.remove(); layerState = []; lastWhole = null; if (SPLIT) arrange([]); }
       if (XF || ATTR){ if (res !== lastRaw){ lastRaw = res; const s = finish(res); lastWhole = s; write(art, s); changed.push(art); } }
-      else { const s = inkScale(res);
+      else if (res !== lastRaw || lastInk !== INK_K){ lastRaw = res; lastInk = INK_K; const s = inkScale(res);
         if (s !== lastWhole){ art.innerHTML = s; lastWhole = s; changed.push(art); } }
     }
     ui.changed = changed; };
-  let lastRaw = null;
+  let lastRaw = null, lastInk = null;
   /* ?split=1. Every top-level layer has an age: renders since its string last changed. Consecutive layers that are all
      "hot" (changed in the last HOT_N renders) or all still share one pane, an <svg class="lay"> stacked over #fig with the
      same viewBox and size, on its own compositing layer (will-change), so that a frame repaints only the panes whose layers
