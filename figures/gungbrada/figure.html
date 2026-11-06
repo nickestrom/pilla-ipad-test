@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="sv"><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Gungbrada</title><style>.mcap{display:none!important}@media (max-width:560px){.stat .v{font-size:20px!important}.stats{align-items:flex-end}}@media (min-width:561px){.vset{top:4px!important}#stats{top:var(--vset-h,44px)!important}}</style><style>@media (max-width:560px){body > header{display:none}}</style><script>window.FIG_A = () => innerWidth <= 560 ? 1.1 : .75;</script><script>window.LBL_U = () => { if (innerWidth > 560) return 0; const s = document.getElementById("fig"); return s && s.clientWidth && s.viewBox.baseVal.width ? s.viewBox.baseVal.width / s.clientWidth : 0; };</script></head><body>
-<script>window.MANIFEST={"schemaVersion":2,"id":"gungbrada","kind":"phenomenon","name":{"sv":"Gungbräda"},"summary":{"sv":"En planka på en bock. Den som sitter längst ut vinner."},"concepts":[{"id":"havstang","part":"planka"}],"ageMin":5,"parts":[{"id":"planka","name":{"sv":"Planka"},"say":{"sv":"Plankan gungar. Det som är tungt och sitter långt ut trycker ner sin sida."},"why":{"sv":"Det som räknas är vikten gånger avståndet från vilopunkten. Är de lika stora på båda sidor står plankan rak. Är en sida större går den ner."},"tappable":true},{"id":"bock","name":{"sv":"Bock"},"say":{"sv":"Här vilar plankan. Det kallas vilopunkt."},"why":{"sv":"Bocken bär upp plankan i en enda punkt. Avstånden mäts från just den punkten. Långt från den punkten blir en liten vikt stark."},"tappable":true},{"id":"sten","name":{"sv":"Sten"},"say":{"sv":"Stenen är tung. Dra den till ett annat hål på plankan."},"tappable":true},{"id":"kloss","name":{"sv":"Kloss"},"say":{"sv":"Klossen är lätt. Dra den långt ut och se om den kan lyfta stenen."},"tappable":true}],"params":{"sten-pos":{"type":"int","min":1,"max":4,"default":1,"part":"sten","drag":"pinnar-vanster","unit":"pinne"},"sten-vikt":{"type":"int","min":1,"max":4,"default":3,"part":"sten","drag":null,"unit":"kloss"},"kloss-pos":{"type":"int","min":1,"max":4,"default":1,"part":"kloss","drag":"pinnar-hoger","unit":"pinne"},"kloss-vikt":{"type":"int","min":1,"max":4,"default":1,"part":"kloss","drag":null,"unit":"kloss"}},"readings":{"lutning":{"type":"enum","values":["vanster-ner","rak","hoger-ner"]}},"law":{"concept":"havstang","map":{"m1":"sten-vikt","d1":"sten-pos","m2":"kloss-vikt","d2":"kloss-pos","tilt":"lutning"}},"predictions":[{"id":"lyft-stenen","set":{"sten-pos":1,"sten-vikt":3,"kloss-vikt":1},"lock":["sten-pos","sten-vikt","kloss-vikt"],"ask":{"sv":"Var ska den lilla klossen sitta för att lyfta den tunga stenen?"},"choices":[{"id":"nara","image":"kloss-nara","set":{"kloss-pos":1}},{"id":"langt","image":"kloss-langt","set":{"kloss-pos":4}}],"outcome":"lutning","explain":{"sv":"Långt ut blir liten kraft stark. Det är en hävstång."}}],"goals":[{"id":"jamvikt-1","ageMin":5,"set":{"sten-pos":2,"sten-vikt":2,"kloss-vikt":1},"lock":["sten-pos","sten-vikt","kloss-vikt"],"ask":{"sv":"Kan du få gungbrädan att stå rak?"},"until":{"reading":"lutning","eq":"rak","holdMs":1000},"explain":{"sv":"Hälften så tung, dubbelt så långt ut. Då väger de lika."}},{"id":"jamvikt-2","ageMin":5,"set":{"sten-pos":1,"sten-vikt":2,"kloss-vikt":2,"kloss-pos":3},"lock":["sten-pos","sten-vikt","kloss-vikt"],"ask":{"sv":"Två stenar och två klossar. Var ska klossarna sitta så att plankan blir rak?"},"until":{"reading":"lutning","eq":"rak","holdMs":1000},"explain":{"sv":"Lika tungt och lika långt ut. Då väger de lika mycket."}},{"id":"jamvikt-3","ageMin":7,"set":{"sten-pos":1,"sten-vikt":4,"kloss-vikt":1,"kloss-pos":2},"lock":["sten-pos","sten-vikt","kloss-vikt"],"ask":{"sv":"Stenen är fyra gånger så tung. Var ska den lilla klossen sitta så att plankan blir rak?"},"until":{"reading":"lutning","eq":"rak","holdMs":1000},"explain":{"sv":"Fyra gånger så tung, fyra gånger så långt ut. Då väger de lika."}}],"realWorld":{"sv":"Prova att öppna en kapsyl med öppnaren. Var håller du för att det ska gå lätt?"},"generatedBy":{"skill":"pilla-figure","version":"m0-hand","date":"2026-11-01"}};window.MANIFEST_HASH="d09fd8f987512b8056621ccb6fb707165b1bf25684707eaa70c79c5d15954204";</script>
+<script>window.MANIFEST={"schemaVersion":2,"id":"gungbrada","kind":"phenomenon","name":{"sv":"Gungbräda"},"summary":{"sv":"En planka på en bock. Den som sitter längst ut vinner."},"concepts":[{"id":"havstang","part":"planka"}],"ageMin":5,"parts":[{"id":"planka","name":{"sv":"Planka"},"say":{"sv":"Plankan gungar. Det som är tungt och sitter långt ut trycker ner sin sida."},"why":{"sv":"Det som räknas är vikten gånger avståndet från vilopunkten. Är de lika stora på båda sidor står plankan rak. Är en sida större går den ner."},"tappable":true},{"id":"bock","name":{"sv":"Bock"},"say":{"sv":"Här vilar plankan. Det kallas vilopunkt."},"why":{"sv":"Bocken bär upp plankan i en enda punkt. Avstånden mäts från just den punkten. Långt från den punkten blir en liten vikt stark."},"tappable":true},{"id":"sten","name":{"sv":"Sten"},"say":{"sv":"Stenen är tung. Dra den till ett annat hål på plankan."},"tappable":true},{"id":"kloss","name":{"sv":"Kloss"},"say":{"sv":"Klossen är lätt. Dra den långt ut och se om den kan lyfta stenen."},"tappable":true}],"params":{"sten-pos":{"type":"int","min":1,"max":4,"default":1,"part":"sten","drag":"pinnar-vanster","unit":"pinne"},"sten-vikt":{"type":"int","min":1,"max":4,"default":3,"part":"sten","drag":null,"unit":"kloss"},"kloss-pos":{"type":"int","min":1,"max":4,"default":1,"part":"kloss","drag":"pinnar-hoger","unit":"pinne"},"kloss-vikt":{"type":"int","min":1,"max":4,"default":1,"part":"kloss","drag":null,"unit":"kloss"}},"readings":{"lutning":{"type":"enum","values":["vanster-ner","rak","hoger-ner"]}},"law":{"concept":"havstang","map":{"m1":"sten-vikt","d1":"sten-pos","m2":"kloss-vikt","d2":"kloss-pos","tilt":"lutning"}},"predictions":[{"id":"lyft-stenen","set":{"sten-pos":1,"sten-vikt":3,"kloss-vikt":1},"lock":["sten-pos","sten-vikt","kloss-vikt"],"ask":{"sv":"Var ska den lilla klossen sitta för att lyfta den tunga stenen?"},"choices":[{"id":"nara","image":"kloss-nara","set":{"kloss-pos":1}},{"id":"langt","image":"kloss-langt","set":{"kloss-pos":4}}],"outcome":"lutning","expect":{"eq":"hoger-ner"},"explain":{"sv":"Långt ut blir liten kraft stark. Det är en hävstång."}}],"goals":[{"id":"jamvikt-1","ageMin":5,"set":{"sten-pos":2,"sten-vikt":2,"kloss-vikt":1},"lock":["sten-pos","sten-vikt","kloss-vikt"],"ask":{"sv":"Kan du få gungbrädan att stå rak?"},"until":{"reading":"lutning","eq":"rak","holdMs":1000},"explain":{"sv":"Hälften så tung, dubbelt så långt ut. Då väger de lika."}},{"id":"jamvikt-2","ageMin":5,"set":{"sten-pos":1,"sten-vikt":2,"kloss-vikt":2,"kloss-pos":3},"lock":["sten-pos","sten-vikt","kloss-vikt"],"ask":{"sv":"Två stenar och två klossar. Var ska klossarna sitta så att plankan blir rak?"},"until":{"reading":"lutning","eq":"rak","holdMs":1000},"explain":{"sv":"Lika tungt och lika långt ut. Då väger de lika mycket."}},{"id":"jamvikt-3","ageMin":7,"set":{"sten-pos":1,"sten-vikt":4,"kloss-vikt":1,"kloss-pos":2},"lock":["sten-pos","sten-vikt","kloss-vikt"],"ask":{"sv":"Stenen är fyra gånger så tung. Var ska den lilla klossen sitta så att plankan blir rak?"},"until":{"reading":"lutning","eq":"rak","holdMs":1000},"explain":{"sv":"Fyra gånger så tung, fyra gånger så långt ut. Då väger de lika."}}],"realWorld":{"sv":"Prova att öppna en kapsyl med öppnaren. Var håller du för att det ska gå lätt?"},"generatedBy":{"skill":"pilla-figure","version":"m0-hand","date":"2026-11-01"}};window.MANIFEST_HASH="d30b1361733f0e01a14c0d6b98af348b12554b290634627616ea6435a2c220b5";</script>
 <script>
 /* ============================================================
    Colorfigures core: projection, shapes, shading, ink, labels, page shell.
@@ -25,18 +25,20 @@ const CERAMIC = { l:'#fbfaf3', m:'#e3e0d2', d:'#bdb8a6' };
 const DARK    = { l:'#55504a', m:'#3d3935', d:'#272421' };
 const INK = '#231e16';
 const SHADOW = '#41538f';
-/* ---------- Pilla: rendering switches for speed tests (URL query; none set = the normal drawing) ----------
-   split=1   each run of layers that changes together gets its own stacked <svg> (same viewBox, its own compositing
-             layer), so a frame repaints only the svgs whose layers changed. Needs a scene that returns layers.
-   glow=grad soft glows without SVG filters: glowLine / glowFill / softStrokes / softGroup below draw stacked translucent
-             strokes and radial gradients instead of a Gaussian blur.
+/* ---------- Pilla: rendering switches (URL query). ON BY DEFAULT: split and glow=grad; the others stay off ----------
+   split=0   (default 1) each run of layers that changes together gets its own stacked <svg> (same viewBox, its own
+             compositing layer), so a frame repaints only the svgs whose layers changed. Needs a scene that returns layers;
+             split=0 draws everything in the one #fig svg, as before.
+   glow=blur (default grad) soft glows without SVG filters: glowLine / glowFill / softStrokes / softGroup below draw stacked
+             translucent strokes and radial gradients; glow=blur uses the Gaussian blur filter instead (the old look).
+   Measured slower or not invisible on desktop, so off by default (kept for comparison):
    gop=0     no group opacity: every <g opacity> in the drawing is folded into fill-opacity / stroke-opacity on the shapes
              inside it (overlapping shapes in a translucent group then show through each other a little).
    clip=0    clip paths inside the drawing are ignored (shadows and clipped details spill over their edges).
    dom=attr  a changed layer is parsed off-screen and the live nodes are patched attribute by attribute, instead of
              replacing the layer's whole content with innerHTML. */
 const PILLA_OPT = (() => { const q = new URLSearchParams(location.search);
-  return { split: q.get('split') === '1', glow: q.get('glow') === 'grad' ? 'grad' : 'blur', gop: q.get('gop') !== '0',
+  return { split: q.get('split') !== '0', glow: q.get('glow') === 'blur' ? 'blur' : 'grad', gop: q.get('gop') !== '0',
     clip: q.get('clip') !== '0', dom: q.get('dom') === 'attr' ? 'attr' : 'html' }; })();
 
 /* ---------- projection (x = depth toward viewer-right, y = toward viewer-left, z = up) ---------- */
@@ -97,6 +99,12 @@ const byDepth = parts => depthSorted(parts).map(p => Array.isArray(p.svg) ? p.sv
 // byDepthL: the same order, but returned as an array of strings (one per part, nested arrays flattened in place), so that
 // scene() can return layers: a part whose drawing did not change since the last frame is then not redrawn (see mountFigure)
 const byDepthL = parts => depthSorted(parts).flatMap(p => p.svg);
+// memo(key, build): the string (or node) build() makes, kept while the camera stays where it is. For a part that is drawn the same
+// every frame (a card, a rack of rods, a tray): the frame then costs a lookup instead of building hundreds of path strings.
+// key must name everything the drawing depends on besides the camera (a state value that changes the drawing goes into the key).
+const MEMO = new Map(); let memoCam = '';
+const memo = (key, build) => { const sig = YAW + '|' + PITCH + '|' + INK_K; if (sig !== memoCam){ MEMO.clear(); memoCam = sig; }
+  let v = MEMO.get(key); if (v === undefined){ v = build(); if (MEMO.size > 400) MEMO.clear(); MEMO.set(key, v); } return v; };
 // the half of a vertical ring that faces the viewer / is turned away, as [from, to] angles in degrees (0 = +x, 90 = +y)
 const nearHalf = () => [YAW - 90, YAW + 90], farHalf = () => [YAW + 90, YAW + 270];
 // an open container (cup, bin, cone, drum) between two rings: far inner wall, then its contents, then the near outer wall
@@ -331,7 +339,10 @@ function softBands(strokes, sd, n){
     A0 = A; P0 = P; }
   return out;
 }
-const bandPaths = (d, strokes, extra, n) => softBands(strokes, GLOW_SD*INK_K, n).map(b =>
+const BAND_CACHE = new Map();   // softBands is pure in (strokes, INK_K, n) and a figure calls it with a handful of values every frame
+const bandsFor = (strokes, n) => { const key = n + '|' + INK_K + '|' + strokes.join(';'); let v = BAND_CACHE.get(key);
+  if (!v){ v = softBands(strokes, GLOW_SD*INK_K, n); if (BAND_CACHE.size > 600) BAND_CACHE.clear(); BAND_CACHE.set(key, v); } return v; };
+const bandPaths = (d, strokes, extra, n) => bandsFor(strokes, n).map(b =>
   `<path d="${d}" fill="none" stroke="${b.c}" style="stroke-width:${b.w.toFixed(2)}" stroke-opacity="${b.a.toFixed(3)}" ${extra} stroke-linecap="round" stroke-linejoin="round"/>`).join('');
 const glowLine = (d, col, w, op, extra = '') => glowOn() ? bandPaths(d, [[col, w, op]], extra, 4)
   : `<path d="${d}" fill="none" stroke="${col}" style="stroke-width:${w}" opacity="${op}" ${extra} filter="url(#tsSoft)"/>`;
@@ -954,6 +965,21 @@ function mountFigure(cfg){
     try { st.xr = 1; window.__ln = Object.assign({}, ln0); const r = cfg.scene(st, PALS[st.pal]), s = nodesToString(r); for (const m of s.matchAll(/data-part="([^"]+)"/g)) ids.add(m[1]); }
     catch (e) {} finally { st.xr = xr0; window.__ln = ln0; _clipN = 0; }
     return [...ids]; };
+  // tapPoint(part): where a finger can really hit the part right now, in the page's client coordinates {x, y}: the point on the part's
+  // own drawing nearest the middle of its box (the middle itself is often empty: a handle's opening, a base hidden behind the body, a
+  // curved cord). null while the part is not drawn or is covered everywhere (a closed case over its insides). For checks and the host.
+  ui.tapPoint = part => {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const g of artAll('[data-part]')){ if (g.dataset.part !== part) continue;
+      for (const c of g.children){ if (c.dataset && c.dataset.hit) continue; const r = c.getBoundingClientRect(); if (!r.width && !r.height) continue;
+        x0 = Math.min(x0, r.left); y0 = Math.min(y0, r.top); x1 = Math.max(x1, r.right); y1 = Math.max(y1, r.bottom); } }
+    if (x0 === Infinity) return null;
+    const cx = (x0 + x1)/2, cy = (y0 + y1)/2, hit = (x, y) => { const e = document.elementFromPoint(x, y), g = e && e.closest && e.closest('[data-part]'); return !!g && g.dataset.part === part; };
+    if (hit(cx, cy)) return { x: cx, y: cy };
+    const step = 2, R = Math.max(x1 - x0, y1 - y0)/2;
+    for (let d = step; d <= R; d += step) for (let a = 0; a < 360; a += Math.max(4, Math.round(step/d*57))){
+      const x = cx + d*Math.cos(a*Math.PI/180), y = cy + d*Math.sin(a*Math.PI/180); if (hit(x, y)) return { x, y }; }
+    return null; };
   ui.reset = () => {
     for (const rec of repairing.values()) rec.cancelled = true;
     repairing.clear();
@@ -1026,6 +1052,7 @@ function xrMount(getUI, caption, opt = {}){   // opt.labelsOnly: only the Labels
   const sv = document.documentElement.classList.contains('pilla'), xrT = sv ? 'Titta inuti' : 'See-through', lbT = sv ? 'Namn' : 'Labels';
   vset.innerHTML = '<div class="vrow">' + (opt.labelsOnly ? '' : `<button class="act" id="xrb" aria-pressed="false">${xrT}</button>`) + `<button class="act" id="lblb" aria-pressed="false">${lbT}</button></div>`;
   document.querySelector('.stage').appendChild(vset);
+  if (q.get('app') === '1') vset.style.display = 'none';   // host option: the app has its own See-through / Names buttons; the switches stay in the DOM so the engine's own code keeps working
   // pages with a stats panel in the top right: the switches go just under it
   const place = () => { const sp = document.getElementById('stats'); vset.style.top = sp ? (sp.offsetTop + sp.offsetHeight + 10) + 'px' : ''; };
   place(); new ResizeObserver(place).observe(document.getElementById('stats') || vset);

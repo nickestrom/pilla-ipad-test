@@ -33,6 +33,7 @@
         { "id": "langt", "image": "kloss-langt", "set": { "kloss-pos": 4 } }
       ],
       "outcome": "lutning",
+      "expect": { "eq": "hoger-ner" },
       "explain": { "sv": "Långt ut blir liten kraft stark. Det är en hävstång." }
     }
   ],

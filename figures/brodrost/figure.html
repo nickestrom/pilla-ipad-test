@@ -25,18 +25,20 @@ const CERAMIC = { l:'#fbfaf3', m:'#e3e0d2', d:'#bdb8a6' };
 const DARK    = { l:'#55504a', m:'#3d3935', d:'#272421' };
 const INK = '#231e16';
 const SHADOW = '#41538f';
-/* ---------- Pilla: rendering switches for speed tests (URL query; none set = the normal drawing) ----------
-   split=1   each run of layers that changes together gets its own stacked <svg> (same viewBox, its own compositing
-             layer), so a frame repaints only the svgs whose layers changed. Needs a scene that returns layers.
-   glow=grad soft glows without SVG filters: glowLine / glowFill / softStrokes / softGroup below draw stacked translucent
-             strokes and radial gradients instead of a Gaussian blur.
+/* ---------- Pilla: rendering switches (URL query). ON BY DEFAULT: split and glow=grad; the others stay off ----------
+   split=0   (default 1) each run of layers that changes together gets its own stacked <svg> (same viewBox, its own
+             compositing layer), so a frame repaints only the svgs whose layers changed. Needs a scene that returns layers;
+             split=0 draws everything in the one #fig svg, as before.
+   glow=blur (default grad) soft glows without SVG filters: glowLine / glowFill / softStrokes / softGroup below draw stacked
+             translucent strokes and radial gradients; glow=blur uses the Gaussian blur filter instead (the old look).
+   Measured slower or not invisible on desktop, so off by default (kept for comparison):
    gop=0     no group opacity: every <g opacity> in the drawing is folded into fill-opacity / stroke-opacity on the shapes
              inside it (overlapping shapes in a translucent group then show through each other a little).
    clip=0    clip paths inside the drawing are ignored (shadows and clipped details spill over their edges).
    dom=attr  a changed layer is parsed off-screen and the live nodes are patched attribute by attribute, instead of
              replacing the layer's whole content with innerHTML. */
 const PILLA_OPT = (() => { const q = new URLSearchParams(location.search);
-  return { split: q.get('split') === '1', glow: q.get('glow') === 'grad' ? 'grad' : 'blur', gop: q.get('gop') !== '0',
+  return { split: q.get('split') !== '0', glow: q.get('glow') === 'blur' ? 'blur' : 'grad', gop: q.get('gop') !== '0',
     clip: q.get('clip') !== '0', dom: q.get('dom') === 'attr' ? 'attr' : 'html' }; })();
 
 /* ---------- projection (x = depth toward viewer-right, y = toward viewer-left, z = up) ---------- */
@@ -97,6 +99,12 @@ const byDepth = parts => depthSorted(parts).map(p => Array.isArray(p.svg) ? p.sv
 // byDepthL: the same order, but returned as an array of strings (one per part, nested arrays flattened in place), so that
 // scene() can return layers: a part whose drawing did not change since the last frame is then not redrawn (see mountFigure)
 const byDepthL = parts => depthSorted(parts).flatMap(p => p.svg);
+// memo(key, build): the string (or node) build() makes, kept while the camera stays where it is. For a part that is drawn the same
+// every frame (a card, a rack of rods, a tray): the frame then costs a lookup instead of building hundreds of path strings.
+// key must name everything the drawing depends on besides the camera (a state value that changes the drawing goes into the key).
+const MEMO = new Map(); let memoCam = '';
+const memo = (key, build) => { const sig = YAW + '|' + PITCH + '|' + INK_K; if (sig !== memoCam){ MEMO.clear(); memoCam = sig; }
+  let v = MEMO.get(key); if (v === undefined){ v = build(); if (MEMO.size > 400) MEMO.clear(); MEMO.set(key, v); } return v; };
 // the half of a vertical ring that faces the viewer / is turned away, as [from, to] angles in degrees (0 = +x, 90 = +y)
 const nearHalf = () => [YAW - 90, YAW + 90], farHalf = () => [YAW + 90, YAW + 270];
 // an open container (cup, bin, cone, drum) between two rings: far inner wall, then its contents, then the near outer wall
@@ -331,7 +339,10 @@ function softBands(strokes, sd, n){
     A0 = A; P0 = P; }
   return out;
 }
-const bandPaths = (d, strokes, extra, n) => softBands(strokes, GLOW_SD*INK_K, n).map(b =>
+const BAND_CACHE = new Map();   // softBands is pure in (strokes, INK_K, n) and a figure calls it with a handful of values every frame
+const bandsFor = (strokes, n) => { const key = n + '|' + INK_K + '|' + strokes.join(';'); let v = BAND_CACHE.get(key);
+  if (!v){ v = softBands(strokes, GLOW_SD*INK_K, n); if (BAND_CACHE.size > 600) BAND_CACHE.clear(); BAND_CACHE.set(key, v); } return v; };
+const bandPaths = (d, strokes, extra, n) => bandsFor(strokes, n).map(b =>
   `<path d="${d}" fill="none" stroke="${b.c}" style="stroke-width:${b.w.toFixed(2)}" stroke-opacity="${b.a.toFixed(3)}" ${extra} stroke-linecap="round" stroke-linejoin="round"/>`).join('');
 const glowLine = (d, col, w, op, extra = '') => glowOn() ? bandPaths(d, [[col, w, op]], extra, 4)
   : `<path d="${d}" fill="none" stroke="${col}" style="stroke-width:${w}" opacity="${op}" ${extra} filter="url(#tsSoft)"/>`;
@@ -954,6 +965,21 @@ function mountFigure(cfg){
     try { st.xr = 1; window.__ln = Object.assign({}, ln0); const r = cfg.scene(st, PALS[st.pal]), s = nodesToString(r); for (const m of s.matchAll(/data-part="([^"]+)"/g)) ids.add(m[1]); }
     catch (e) {} finally { st.xr = xr0; window.__ln = ln0; _clipN = 0; }
     return [...ids]; };
+  // tapPoint(part): where a finger can really hit the part right now, in the page's client coordinates {x, y}: the point on the part's
+  // own drawing nearest the middle of its box (the middle itself is often empty: a handle's opening, a base hidden behind the body, a
+  // curved cord). null while the part is not drawn or is covered everywhere (a closed case over its insides). For checks and the host.
+  ui.tapPoint = part => {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const g of artAll('[data-part]')){ if (g.dataset.part !== part) continue;
+      for (const c of g.children){ if (c.dataset && c.dataset.hit) continue; const r = c.getBoundingClientRect(); if (!r.width && !r.height) continue;
+        x0 = Math.min(x0, r.left); y0 = Math.min(y0, r.top); x1 = Math.max(x1, r.right); y1 = Math.max(y1, r.bottom); } }
+    if (x0 === Infinity) return null;
+    const cx = (x0 + x1)/2, cy = (y0 + y1)/2, hit = (x, y) => { const e = document.elementFromPoint(x, y), g = e && e.closest && e.closest('[data-part]'); return !!g && g.dataset.part === part; };
+    if (hit(cx, cy)) return { x: cx, y: cy };
+    const step = 2, R = Math.max(x1 - x0, y1 - y0)/2;
+    for (let d = step; d <= R; d += step) for (let a = 0; a < 360; a += Math.max(4, Math.round(step/d*57))){
+      const x = cx + d*Math.cos(a*Math.PI/180), y = cy + d*Math.sin(a*Math.PI/180); if (hit(x, y)) return { x, y }; }
+    return null; };
   ui.reset = () => {
     for (const rec of repairing.values()) rec.cancelled = true;
     repairing.clear();
@@ -1026,6 +1052,7 @@ function xrMount(getUI, caption, opt = {}){   // opt.labelsOnly: only the Labels
   const sv = document.documentElement.classList.contains('pilla'), xrT = sv ? 'Titta inuti' : 'See-through', lbT = sv ? 'Namn' : 'Labels';
   vset.innerHTML = '<div class="vrow">' + (opt.labelsOnly ? '' : `<button class="act" id="xrb" aria-pressed="false">${xrT}</button>`) + `<button class="act" id="lblb" aria-pressed="false">${lbT}</button></div>`;
   document.querySelector('.stage').appendChild(vset);
+  if (q.get('app') === '1') vset.style.display = 'none';   // host option: the app has its own See-through / Names buttons; the switches stay in the DOM so the engine's own code keeps working
   // pages with a stats panel in the top right: the switches go just under it
   const place = () => { const sp = document.getElementById('stats'); vset.style.top = sp ? (sp.offsetTop + sp.offsetHeight + 10) + 'px' : ''; };
   place(); new ResizeObserver(place).observe(document.getElementById('stats') || vset);
@@ -1391,12 +1418,14 @@ function toasterLocal(st, m, k){
     return { box:[[x + 1.5, 27, H], [x + 6.5, 93, bt]], svg: act('bread', part('brod', slice(x + 1.5, x + 6.5, bt, toastCol(cb), toastCol(cf)))) }; }) : []);
 
   let hits = '';
-  let mech = '';
-  if (k > 0){ body = xrGhost(body, '', k, OUT, 0, W, m); mech = `<g opacity="${f(k)}">${toastMech(st, k)}</g>`; }   // inside parts over the ghost
+  let mech = [];                                                       // the inside parts, one layer per part (nodes: see mvNode in scene)
+  if (k > 0){ body = xrGhost(body, '', k, OUT, 0, W, m);              // inside parts over the ghost
+    const ml = toastMech(st, k); mech = k < 1 ? [{ g: { opacity: f(k) }, kids: ml }] : ml; }   // a finished fade is not wrapped: opacity 1 costs nothing, a group costs a buffer
   if (k > .6) hits = xrHits(st);
-  // ?split=1 speed test: the same drawing as layers (ghosted case, inside parts, mounted parts, bread), see scene()
+  // layers (see scene): the ghosted case, each inside part, mounted parts, bread
   if (PILLA_OPT.split) return FRONT ? [body, mech, mounted, bread + hits] : [mounted, body, mech, bread + hits];
-  return (FRONT ? body + mech + mounted : mounted + body + mech) + bread + hits;
+  const mechS = mech.map(function str(n){ return Array.isArray(n) ? n.map(str).join('') : typeof n === 'object' ? `<g opacity="${n.g.opacity}">${n.kids.map(str).join('')}</g>` : n; }).join('');
+  return (FRONT ? body + mechS + mounted : mounted + body + mechS) + bread + hits;
 }
 
 /* ---------- see-through: how a real pop-up toaster works ----------
@@ -1451,7 +1480,8 @@ function toastMech(st, k){
   // ---- heating: three mica cards with nichrome zigzags, held by two rails at the top
   CARDS.forEach((xc, ci) => {
     const dead = ci === 2 && st.fWire;                                // broken wire: no current, so it stays grey and never glows
-    let c = part('varmekort', shape(on(PX(xc), rectUV(CY0, CZ0, CY1, CZ1)), MICA.m, .8)), wd = '';
+    const cardBase = () => part('varmekort', shape(on(PX(xc), rectUV(CY0, CZ0, CY1, CZ1)), MICA.m, .8));
+    let c = dead ? cardBase() : memo('card' + xc, cardBase), wd = '';
     const lerpEnd = dead && rw >= 0 ? clamp01(rw/.25) : 0;           // the loose ends straighten back during a repair
     if (dead){      // a scorched smudge on the card where the wire gave way, so the break reads at a glance
       const [SX0, SY0] = P(xc + .2, (BRK[0] + BRK[1])/2, CZ0 + 6 + 8*3), so = rw >= 0 ? 1 - clamp01(rw/.6) : 1;
@@ -1459,11 +1489,13 @@ function toastMech(st, k){
       c += glowFill(`M${f(SX0 - rx)} ${f(SY0 - ry)}L${f(SX0 + rx)} ${f(SY0 + ry)}`, '#3a2a22', f(.3*so), 'pointer-events="none"',
         `<ellipse cx="${f(SX0)}" cy="${f(SY0)}" rx="${rx.toFixed(2)}" ry="${ry.toFixed(2)}"`);
     }
-    for (let z = CZ0 + 6, r = 0; z <= CZ1 - 6; z += 8, r++) for (const xf of [xc + .12, xc - .12]){
-      if (dead && r === 3) wd += pd(on(PX(xf), zig(CY0 + 2, BRK[0], z, 1.6, 10)), false) + pd(on(PX(xf), zig(BRK[1], CY1 - 2, z, 1.6, 10)), false);
-      else wd += pd(on(PX(xf), zig(CY0 + 2, CY1 - 2, z, 1.6, 22)), false);
-    }
-    c += part('glodtrad', `<path d="${wd}" fill="none" stroke="${dead ? '#7d7169' : hot('#ff4d1a')}" style="stroke-width:.7" stroke-linejoin="round"/>`
+    wd = memo('wd' + xc + dead, () => { let w = '';   // the zigzag path data: only the camera changes it
+      for (let z = CZ0 + 6, r = 0; z <= CZ1 - 6; z += 8, r++) for (const xf of [xc + .12, xc - .12]){
+        if (dead && r === 3) w += pd(on(PX(xf), zig(CY0 + 2, BRK[0], z, 1.6, 10)), false) + pd(on(PX(xf), zig(BRK[1], CY1 - 2, z, 1.6, 10)), false);
+        else w += pd(on(PX(xf), zig(CY0 + 2, CY1 - 2, z, 1.6, 22)), false);
+      }
+      return w; });
+    const wireStr = part('glodtrad', `<path d="${wd}" fill="none" stroke="${dead ? '#7d7169' : hot('#ff4d1a')}" style="stroke-width:.7" stroke-linejoin="round"/>`
       + (h > .05 && !dead ? glowLine(wd, '#ff8a3d', 2.4, f(.5*h), 'stroke-linejoin="round"') : ''));
     // a repair lays a new glowing wire along the whole row, left to right, then lets it cool to match the card
     let lay = '';
@@ -1474,7 +1506,9 @@ function toastMech(st, k){
         + (cool < 1 ? glowLine(wdl, '#ff9b4a', 3.2, f(.7*(1 - cool)), 'stroke-linejoin="round"') : '')
         + (fr < 1 ? (() => { const [X, Y] = P(xc + .2, yEnd, zr); return `<circle cx="${f(X)}" cy="${f(Y)}" r="${(1.4*CAM_K).toFixed(2)}" fill="#fff3c4" stroke="${INK}" stroke-width=".6"/>`; })() : ''));
     }
-    put([[xc - .3, CY0, CZ0], [xc + .3, CY1, CZ1]], c + lay);
+    // the card itself rests; the wire and its glow change with the heat, so they are a part (a layer) of their own
+    put([[xc - .3, CY0, CZ0], [xc + .3, CY1, CZ1]], c);
+    put([[xc - .3, CY0, CZ0], [xc + .3, CY1, CZ1]], wireStr + lay);
     if (dead){      // the two loose ends, each bent away from the card (one to +x, one to -x) and tipped with a dot
       const zb = CZ0 + 6 + 8*3;
       for (const [yb, dx, dz] of [[BRK[0], 1, .8], [BRK[1], 1, -.8]]){
@@ -1488,7 +1522,7 @@ function toastMech(st, k){
   for (const y of [CY0 - 1.5, CY1 + 1.5]) put([[CARDS[0] - 1, y - .8, CZ1 - .2], [CARDS[2] + 1, y + .8, CZ1 + 1.4]], part('varmekort', box(CARDS[0] - 1, y - .8, CZ1, CARDS[2] + 1, y + .8, CZ1 + 1.4, TGM, toneI, .6)));
   // bread guards: thin wires each side of each slot, standing on the crumb tray's frame
   for (const x of SLOTS) for (const xg of [x + 1, x + 7]) for (const y of [30, 50, 70, 90])
-    put([[xg - .4, y - .4, CZ0], [xg + .4, y + .4, CZ1]], rod([xg, y, CZ0], [xg, y, CZ1], .3, METAL, toneI, .3));
+    put([[xg - .4, y - .4, CZ0], [xg + .4, y + .4, CZ1]], memo('gd' + xg + '/' + y, () => rod([xg, y, CZ0], [xg, y, CZ1], .3, METAL, toneI, .3)));
   // ---- the bread, standing on its rack inside the slot (above the top the scene draws it as before): two halves, one per face
   if (st.bread) SLOTS.forEach((x, si) => { const [cb, cf] = sliceFaces(st, si);
     for (const [xa, xb, b] of [[x + 1.5, x + 4, cb], [x + 4, x + 6.5, cf]]){ const col = toastCol(b), cm = { l: col, m: mix(col, '#000000', .12), d: mix(col, '#000000', .3) };
@@ -1496,10 +1530,10 @@ function toastMech(st, k){
   // ---- pop-up: racks on a crossbar, carriage block on the guide rod, lever arm, spring, contacts
   for (const x of SLOTS) put([[x + 1, 20, rack - .6], [x + 7, 100, rack + .6]], part('vagn', box(x + 1, 20, rack - .6, x + 7, 100, rack + .6, METAL, toneI, .6)));
   put([[SLOTS[0] + 1, 17, rack - .7], [GROD[0], 19, rack + .7]], part('vagn', rod([SLOTS[0] + 1, 18, rack], [SX, 18, rack], .7, METAL, toneI, .6)));
-  put([[GROD[0] - .8, GROD[1] - .8, 6], [GROD[0] + .8, GROD[1] + .8, CZ1 + 2]], part('vagn', rod([GROD[0], GROD[1], 6], [GROD[0], GROD[1], CZ1 + 2], .8, METAL, toneI, .6)));
+  put([[GROD[0] - .8, GROD[1] - .8, 6], [GROD[0] + .8, GROD[1] + .8, CZ1 + 2]], memo('grod', () => part('vagn', rod([GROD[0], GROD[1], 6], [GROD[0], GROD[1], CZ1 + 2], .8, METAL, toneI, .6))));
   put([[SX, 12, lz - 4], [64, 20, lz + 4]], part('vagn', box(SX, 12, lz - 4, 64, 20, lz + 4, TGM, toneI, .8)));
   put([[64, 15, lz - 1.5], [W, 21, lz + 1.5]], part('spak', box(64, 15, lz - 1.5, W, 21, lz + 1.5, TGM, toneI, .6)));                // lever arm out through the front slot
-  put([[GROD[0] - 4, 10, CZ1 + 2], [GROD[0] + 4, 22, CZ1 + 4]], box(GROD[0] - 4, 10, CZ1 + 2, GROD[0] + 4, 22, CZ1 + 4, TGM, toneI, .6));   // top bracket
+  put([[GROD[0] - 4, 10, CZ1 + 2], [GROD[0] + 4, 22, CZ1 + 4]], memo('brk', () => box(GROD[0] - 4, 10, CZ1 + 2, GROD[0] + 4, 22, CZ1 + 4, TGM, toneI, .6)));   // top bracket
   // the extension spring: whole when fitted; snapped into a piece hanging from the bracket and a stub on the carriage when not;
   // a repair slides a new gold spring in under the bracket, stretches it down to the carriage and lets it settle
   { const z0 = lz + 4, z1 = CZ1 + 2, L = z1 - z0, sx = GROD[0], sy = GROD[1] + 2.4;
@@ -1571,12 +1605,12 @@ function toastMech(st, k){
   put([[SX + 1, DY - 1, DZ - 1], [SX + 3, 29, DZ + 4]], part('ratt', rod([SX + 2, DY, DZ], [SX + 2, 28, DZ + 3], .6, TGM, toneI, .5)));          // crank on the dial shaft
   put([[SX + 1, 27, DZ + 3], [SX + 3, 32, 75]], part('ratt', rod([SX + 2, 28, DZ + 3], [SX + 2, 28, 72.5], .5, METAL, toneI, .5) + rod([SX + 2, 28, 72.5], [SX + .6, 31.5, 74.5], .5, METAL, toneI, .5)));   // push rod up to the strip's bracket
   // ---- power: grommet, terminal block, live wire along the floor to the contacts, bus from the contacts to the cards
-  bx(2, 94, 5, 9, 102, 12, matOf('#e8e4da'), .6);
+  put([[2, 94, 5], [9, 102, 12]], memo('grom', () => box(2, 94, 5, 9, 102, 12, matOf('#e8e4da'), toneI, .6)));
   parts.push(tWire([[9, 98, 8], [12, 112, 5], [GROD[0] + 2, 112, 5], [GROD[0] + 2, 22, 5], [GROD[0] + 2, 21, 27]], closed ? '#ff6a2a' : '#b5482d'));
   parts.push(tWire([[GROD[0] - 2, 9, 30], [54, 9, 22], [54, 20, 12], [CARDS[0], 20, 12]], closed ? '#ff6a2a' : '#3a3632'));
   for (const xc of CARDS) parts.push(tWire([[xc, 20, 12], [xc, CY0, CZ0]], closed ? '#ff6a2a' : '#3a3632', .4));
   // crumb tray
-  bx(6, 12, 2, 64, 108, 4, matOf('#c9cfd2'), .9, 'smulbricka');
+  put([[6, 12, 2], [64, 108, 4]], memo('tray', () => part('smulbricka', box(6, 12, 2, 64, 108, 4, matOf('#c9cfd2'), toneI, .9))));
   const popping = st.mode === 'pop';
   MECH_ITEMS = [
     { at: [CARDS[0], 40, 62], text: partName('varmekort'), on: h > .05 },
@@ -1588,7 +1622,7 @@ function toastMech(st, k){
     { at: [SX, 33 - 4*b, 66], text: partName('bimetall'), on: (closed && b > .02) || rb >= 0 },
     { at: [(W + SX)/2, 18, lz], text: partName('spak'), on: down > .5 },
     { at: [35, 110, 3], text: partName('smulbricka'), on: false } ];
-  return byDepth(parts);
+  return byDepthL(parts);   // one layer per part: the cards, the rods and the tray rest, the wires, the bread and the pop-up parts change
 }
 
 /* ---------- bench props (bench frame): the power strip and the toaster's mains cord, plugged in ---------- */
@@ -1648,8 +1682,10 @@ function scene(st, m){
     + castShadow(boxCorners(STRIP.x0, STRIP.y0, TZ, STRIP.x1, STRIP.y1, TZ + STRIP.h), TZ, BTOP);
 
   const tl = toasterLocal(st, m, k), o = Dv(TX, TY, TZ), mv = x => `<g transform="translate(${o[0].toFixed(2)} ${o[1].toFixed(2)})">${x}</g>`;
+  // the layers of toasterLocal may be strings, arrays or { g, kids } groups: every string leaf is placed on the bench, the shape stays
+  const mvNode = n => Array.isArray(n) ? n.map(mvNode) : n !== null && typeof n === 'object' ? { g: n.g, kids: n.kids.map(mvNode) } : mv(n);
   const items = [
-    { box:[[TX, TY, TZ], [TX + W + 8, TY + D, TZ + H + 24]], svg: Array.isArray(tl) ? tl.map(mv) : mv(tl) },
+    { box:[[TX, TY, TZ], [TX + W + 8, TY + D, TZ + H + 24]], svg: Array.isArray(tl) ? tl.map(mvNode) : mv(tl) },
     { box:[[STRIP.x0, STRIP.y0, TZ], [STRIP.x1, STRIP.y1, TZ + STRIP.h]], svg: rbStrip(st) },
     { box:[[-1.5, 144.5, TZ], [STRIP.x0, 147.5, TZ + 5.6]], svg: rbStripCord() },
     ...rbCordItems() ];
