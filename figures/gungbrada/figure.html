@@ -39,7 +39,8 @@ const SHADOW = '#41538f';
              replacing the layer's whole content with innerHTML. */
 const PILLA_OPT = (() => { const q = new URLSearchParams(location.search);
   return { split: q.get('split') !== '0', glow: q.get('glow') === 'blur' ? 'blur' : 'grad', gop: q.get('gop') !== '0',
-    clip: q.get('clip') !== '0', dom: q.get('dom') === 'attr' ? 'attr' : 'html', panes: q.get('panes') === 'old' ? 'old' : 'lazy', merge: q.get('merge') != null ? +q.get('merge') : 6000 }; })();
+    clip: q.get('clip') !== '0', dom: q.get('dom') === 'attr' ? 'attr' : 'html', panes: q.get('panes') === 'old' ? 'old' : 'lazy', merge: q.get('merge') != null ? +q.get('merge') : 6000,
+    settle: q.get('settle') !== '0' }; })();
 
 /* ---------- projection (x = depth toward viewer-right, y = toward viewer-left, z = up) ---------- */
 const C = Math.cos(Math.PI/6), S = Math.sin(Math.PI/6);
@@ -753,7 +754,9 @@ function mountFigure(cfg){
        a hot layer that goes still stays where it is until a promotion forces a regroup anyway or the whole scene has been
        quiet for HOT_N renders. Fewer regroups = fewer layers moved and repainted while something winds down.
      - Fewer panes: a still run whose layers' strings total less than STILL_MERGE_CHARS is drawn in the hot pane next to it;
-       repainting a little still drawing is cheaper on a tablet than one more full-size composited layer. */
+       repainting a little still drawing is cheaper on a tablet than one more full-size composited layer.
+     - ?settle=0 (test switch): when the whole scene goes quiet the panes are left as they are instead of being regrouped
+       into fewer; that last regroup moves and repaints every layer in one frame, a visible hitch on the iPad. */
   const STILL_MERGE_CHARS = PILLA_OPT.merge, OLD_PANES = PILLA_OPT.panes === 'old';
   const layLen = e => e.str != null ? e.str.length : e.el.innerHTML.length;
   function arrange(changed){
@@ -769,7 +772,7 @@ function mountFigure(cfg){
       const anyHot = hot.includes(true), cur = sig.length === n ? sig : null;   // sig: '1' where a layer was put in a hot pane at the last regroup
       let need = detached || cur === null;
       if (!need) for (let i = 0; i < n; i++) if (hot[i] && cur[i] !== '1'){ need = true; break; }
-      if (!need && !anyHot && cur.includes('1')) need = true;
+      if (!need && !anyHot && cur.includes('1') && PILLA_OPT.settle) need = true;
       if (!need) return;
       if (anyHot){ for (let i = 0; i < n; ){ if (hot[i]){ i++; continue; }
           let k = i, len = 0; while (k < n && !hot[k]){ len += layLen(layerState[k]); k++; }
