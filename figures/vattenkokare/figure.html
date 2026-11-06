@@ -1393,10 +1393,12 @@ function steamOutside(st){
   if (a < .02) return { front:'', back:'' };
   const C0 = SPOUT_C;
   let spw = '';
-  [0, 1, 2].forEach(i => { spw += wisp([C0[0] + .5 + i*.4, C0[1] + (i - 1)*1.8, C0[2] + 1], i*2.1, 8, 4.6, 1.1, [.55, 0], a, 4.4).svg; });
+  // wisp count is the main paint cost on the iPad (measured: each steam wisp is several wide translucent paths that
+  // move every frame), so two slightly wider ones from the spout and two thin ones at the lid; the lid ones get 2 bands
+  [0, 1].forEach(i => { spw += wisp([C0[0] + .7 + i*.4, C0[1] + (i - .5)*2.4, C0[2] + 1], i*2.6, 8, 4.6, 1.1, [.55, 0], a, 5).svg; });
   (facing([1,0,0]) ? front : back).push(spw);
-  [125, 200, 275].forEach((deg, i) => { const an = deg*DEG, r = 26.4, b = [KX + r*Math.cos(an), KY + r*Math.sin(an), ZT + 1.6];
-    const ws = wisp(b, 1.3 + i*1.7, 6, 3.8, .9, [.2*Math.cos(an), .2*Math.sin(an)], a*.8, 3.2).svg;
+  [150, 250].forEach((deg, i) => { const an = deg*DEG, r = 26.4, b = [KX + r*Math.cos(an), KY + r*Math.sin(an), ZT + 1.6];
+    const ws = wisp(b, 1.3 + i*2.4, 6, 3.8, .9, [.2*Math.cos(an), .2*Math.sin(an)], a*.8, 3.2, STEAM_BANDS_IN).svg;
     (facing(nAt(an)) ? front : back).push(ws); });
   const g = s => s ? softGroup(s) : '';
   return { front: g(front.join('')), back: g(back.join('')) };
@@ -1709,7 +1711,7 @@ function kettleMech(st, k){
       w += `<g opacity=".26">${loft(WA, WB, n2 => toneI(n2, WATERM), true)}</g>`;
       // bubbles: they form on the hot floor and rise, more and bigger toward the boil
       const b = qz(clamp01((st.temp - .6)/.4));
-      if (b > 0 && !DIAG_NOBUB){ let bs = ''; const cnt = Math.round(6 + 20*b);
+      if (b > 0 && !DIAG_NOBUB){ let bs = ''; const cnt = Math.round(4 + 12*b);   // up to 16: on the iPad 26 cost a few fps
         for (let i = 0; i < cnt; i++){ const an = i*2.39996, rr = 4 + (i*7.7) % 22, u = (t/(2200 - 900*b) + i*.137) % 1, z = ZF + .6 + u*(zW - ZF - .8);
           const [X, Y] = P(KX + rr*Math.cos(an), KY + rr*Math.sin(an), z), sz = (.35 + .7*u)*(.6 + .9*b);
           bs += `<circle cx="${f(X)}" cy="${f(Y)}" r="${(sz*CAM_K).toFixed(2)}" fill="#ffffff" fill-opacity=".6" stroke="#3c7ea6" stroke-width=".4"/>`; }
@@ -1720,7 +1722,8 @@ function kettleMech(st, k){
     // steam over the water (and swirling round a blocked inlet without going in)
     let sm = '';
     if (sq > .02 && st.water > .02){ const zW = zWater(st.water), top = ZT - 2, n = Math.max(2, Math.floor((top - zW)/3.2));
-      [[8, 6], [-6, 10], [4, -10], [-14, -2]].forEach(([dx, dy], i) => { sm += wisp([KX + dx, KY + dy, zW + .5], i*1.9, n, (top - zW - .5)/n, .8, [-.35, 0], sq, 3.2, STEAM_BANDS_IN).svg; });
+      // two wisps over the water (four cost the iPad several fps; see the outside steam)
+      [[6, 7], [-8, -5]].forEach(([dx, dy], i) => { sm += wisp([KX + dx, KY + dy, zW + .5], i*2.7, n, (top - zW - .5)/n, .8, [-.35, 0], sq, 3.8, STEAM_BANDS_IN).svg; });
       if (st.kalk && !(repT(st, 'kalk') > 2)) sm += wisp([KX - 16, KY + 1, ZT - 12], 4.2, 3, 2.2, 1.6, [.9, 0], sq*.8, 2, STEAM_BANDS_IN).svg;
       sm = softGroup(sm); }
     // one item of separate layers (water, the tube, its puffs, steam) in the right order: the still tube is not repainted with the water
